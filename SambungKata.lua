@@ -26,8 +26,15 @@ local URL_KBBI = "https://raw.githubusercontent.com/zevilents/sambungkata/main/k
 
 local MAX_RESULTS = 50
 local CHAIN_LENGTH = 2
-local AUTOTYPE_DELAY = 0.05   -- Delay antar huruf saat auto-typing (detik). Makin kecil = makin cepat
 local AUTOTYPE_ENABLED = true -- Set false untuk disable fitur auto-type
+
+-- Speed modes untuk auto-typing
+local SPEED_MODES = {
+    { name = "Slow",   delay = 0.12, icon = "🐢", color = Color3.fromRGB(255, 152, 0) },
+    { name = "Normal", delay = 0.05, icon = "🚶", color = Color3.fromRGB(33, 150, 243) },
+    { name = "Cepat",  delay = 0.02, icon = "⚡", color = Color3.fromRGB(76, 175, 80) },
+}
+local currentSpeedIndex = 2 -- Default: Normal
 
 ------------------------------------------------------------
 -- DIFFICULTY DEFINITIONS
@@ -246,7 +253,18 @@ local function autoTypeText(text, prefix)
                 updateTypingStatus(true, remaining, i)
             end
             
-            task.wait(AUTOTYPE_DELAY)
+            task.wait(SPEED_MODES[currentSpeedIndex].delay)
+        end
+        
+        -- Auto-ENTER setelah selesai typing
+        if not stopTyping then
+            task.wait(0.05)
+            pcall(function()
+                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
+                task.wait(0.01)
+                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
+            end)
+            print("[SambungKata] Auto-ENTER sent!")
         end
         
         isTyping = false
@@ -593,11 +611,105 @@ WordCountLabel.Font = Enum.Font.Gotham
 WordCountLabel.TextXAlignment = Enum.TextXAlignment.Right
 WordCountLabel.Parent = DiffRow
 
+-- ---- ROW 2.5: Speed toggle buttons ----
+local SpeedRow = Instance.new("Frame")
+SpeedRow.Size = UDim2.new(1, 0, 0, 28)
+SpeedRow.Position = UDim2.new(0, 0, 0, 78)
+SpeedRow.BackgroundTransparency = 1
+SpeedRow.Parent = GamePage
+
+local SpeedLabel = Instance.new("TextLabel")
+SpeedLabel.Size = UDim2.new(0, 52, 1, 0)
+SpeedLabel.Position = UDim2.new(0, 0, 0, 0)
+SpeedLabel.BackgroundTransparency = 1
+SpeedLabel.Text = "⌨ Speed:"
+SpeedLabel.TextColor3 = Color3.fromRGB(90, 90, 130)
+SpeedLabel.TextSize = 10
+SpeedLabel.Font = Enum.Font.GothamBold
+SpeedLabel.TextXAlignment = Enum.TextXAlignment.Left
+SpeedLabel.Parent = SpeedRow
+
+local speedButtons = {}
+local speedXOffset = 56
+
+for i, mode in ipairs(SPEED_MODES) do
+    local isActive = (i == currentSpeedIndex)
+    local labelText = mode.icon .. " " .. mode.name
+    local btnW = 72
+
+    local sBtn = Instance.new("TextButton")
+    sBtn.Name = "Speed_" .. mode.name
+    sBtn.Size = UDim2.new(0, btnW, 1, 0)
+    sBtn.Position = UDim2.new(0, speedXOffset, 0, 0)
+    sBtn.BackgroundColor3 = mode.color
+    sBtn.BackgroundTransparency = isActive and 0.2 or 0.85
+    sBtn.Text = labelText
+    sBtn.TextColor3 = isActive and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(100, 100, 140)
+    sBtn.TextSize = 10
+    sBtn.Font = Enum.Font.GothamBold
+    sBtn.BorderSizePixel = 0
+    sBtn.AutoButtonColor = false
+    sBtn.Parent = SpeedRow
+    Instance.new("UICorner", sBtn).CornerRadius = UDim.new(0, 7)
+
+    local sStroke = Instance.new("UIStroke", sBtn)
+    sStroke.Color = mode.color
+    sStroke.Transparency = isActive and 0.3 or 0.85
+    sStroke.Thickness = 1
+
+    speedButtons[i] = { button = sBtn, stroke = sStroke }
+    speedXOffset = speedXOffset + btnW + 5
+end
+
+-- Auto-enter indicator
+local AutoEnterLabel = Instance.new("TextLabel")
+AutoEnterLabel.Size = UDim2.new(0, 75, 1, 0)
+AutoEnterLabel.Position = UDim2.new(1, -75, 0, 0)
+AutoEnterLabel.BackgroundTransparency = 1
+AutoEnterLabel.Text = "↵ Auto-Enter"
+AutoEnterLabel.TextColor3 = Color3.fromRGB(76, 175, 80)
+AutoEnterLabel.TextSize = 9
+AutoEnterLabel.Font = Enum.Font.GothamBold
+AutoEnterLabel.TextXAlignment = Enum.TextXAlignment.Right
+AutoEnterLabel.Parent = SpeedRow
+
+local function updateSpeedVisuals()
+    for i, data in ipairs(speedButtons) do
+        local isActive = (i == currentSpeedIndex)
+        local mode = SPEED_MODES[i]
+        createTween(data.button, {
+            BackgroundTransparency = isActive and 0.2 or 0.85,
+            TextColor3 = isActive and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(100, 100, 140)
+        }, 0.15):Play()
+        createTween(data.stroke, {
+            Transparency = isActive and 0.3 or 0.85
+        }, 0.15):Play()
+    end
+end
+
+for i, data in ipairs(speedButtons) do
+    data.button.MouseButton1Click:Connect(function()
+        currentSpeedIndex = i
+        updateSpeedVisuals()
+        print("[SambungKata] Speed: " .. SPEED_MODES[i].name .. " (" .. SPEED_MODES[i].delay .. "s)")
+    end)
+    data.button.MouseEnter:Connect(function()
+        if i ~= currentSpeedIndex then
+            createTween(data.button, {BackgroundTransparency = 0.55}, 0.1):Play()
+        end
+    end)
+    data.button.MouseLeave:Connect(function()
+        if i ~= currentSpeedIndex then
+            createTween(data.button, {BackgroundTransparency = 0.85}, 0.1):Play()
+        end
+    end)
+end
+
 -- ---- ROW 3: Chain info (only visible in chain mode) ----
 local ChainInfo = Instance.new("Frame")
 ChainInfo.Name = "ChainInfo"
 ChainInfo.Size = UDim2.new(1, 0, 0, 50)
-ChainInfo.Position = UDim2.new(0, 0, 0, 80)
+ChainInfo.Position = UDim2.new(0, 0, 0, 110)
 ChainInfo.BackgroundColor3 = Color3.fromRGB(25, 25, 38)
 ChainInfo.BorderSizePixel = 0
 ChainInfo.Visible = false
@@ -650,7 +762,7 @@ Instance.new("UICorner", NewChainBtn).CornerRadius = UDim.new(0, 6)
 local SearchFrame = Instance.new("Frame")
 SearchFrame.Name = "SearchFrame"
 SearchFrame.Size = UDim2.new(1, 0, 0, 40)
-SearchFrame.Position = UDim2.new(0, 0, 0, 80)
+SearchFrame.Position = UDim2.new(0, 0, 0, 110)
 SearchFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 38)
 SearchFrame.BorderSizePixel = 0
 SearchFrame.Parent = GamePage
@@ -799,17 +911,18 @@ local function updateLayout()
     if isChainMode then
         ChainInfo.Visible = true
         ScoreLabel.Visible = true
-        SearchFrame.Position = UDim2.new(0, 0, 0, 136)
-        TypingBar.Position = UDim2.new(0, 0, 0, 180)
-        ResultsFrame.Position = UDim2.new(0, 0, 0, 182)
-        ResultsFrame.Size = UDim2.new(1, 0, 1, -184)
+        ChainInfo.Position = UDim2.new(0, 0, 0, 110)
+        SearchFrame.Position = UDim2.new(0, 0, 0, 166)
+        TypingBar.Position = UDim2.new(0, 0, 0, 210)
+        ResultsFrame.Position = UDim2.new(0, 0, 0, 212)
+        ResultsFrame.Size = UDim2.new(1, 0, 1, -214)
     else
         ChainInfo.Visible = false
         ScoreLabel.Visible = false
-        SearchFrame.Position = UDim2.new(0, 0, 0, 80)
-        TypingBar.Position = UDim2.new(0, 0, 0, 122)
-        ResultsFrame.Position = UDim2.new(0, 0, 0, 126)
-        ResultsFrame.Size = UDim2.new(1, 0, 1, -128)
+        SearchFrame.Position = UDim2.new(0, 0, 0, 110)
+        TypingBar.Position = UDim2.new(0, 0, 0, 154)
+        ResultsFrame.Position = UDim2.new(0, 0, 0, 156)
+        ResultsFrame.Size = UDim2.new(1, 0, 1, -158)
     end
 end
 
