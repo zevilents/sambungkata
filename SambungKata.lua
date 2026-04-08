@@ -30,8 +30,8 @@ local AUTOTYPE_ENABLED = true -- Set false untuk disable fitur auto-type
 
 -- Speed modes untuk auto-typing
 local SPEED_MODES = {
-    { name = "Slow",   delay = 0.12, icon = "🐢", color = Color3.fromRGB(255, 152, 0) },
-    { name = "Normal", delay = 0.05, icon = "🚶", color = Color3.fromRGB(33, 150, 243) },
+    { name = "Slow",   delay = 0.22, icon = "🐢", color = Color3.fromRGB(255, 152, 0) },
+    { name = "Normal", delay = 0.07, icon = "🚶", color = Color3.fromRGB(33, 150, 243) },
     { name = "Cepat",  delay = 0.02, icon = "⚡", color = Color3.fromRGB(76, 175, 80) },
 }
 local currentSpeedIndex = 2 -- Default: Normal
@@ -188,55 +188,195 @@ end
 ------------------------------------------------------------
 -- AUTO-DETECT LETTER FROM GAME UI
 ------------------------------------------------------------
+
+-- Helper: cari semua TextLabel/TextButton dalam sebuah instance (recursive)
+local function getAllTextElements(root)
+    local elements = {}
+    for _, desc in ipairs(root:GetDescendants()) do
+        if (desc:IsA("TextLabel") or desc:IsA("TextButton")) then
+            table.insert(elements, desc)
+        end
+    end
+    return elements
+end
+
+-- Helper: cek apakah instance atau ancestor-nya visible
+local function isEffectivelyVisible(inst)
+    local current = inst
+    while current do
+        if current:IsA("GuiObject") then
+            if current.Visible == false then return false end
+        end
+        if current:IsA("ScreenGui") then break end
+        current = current.Parent
+    end
+    return true
+end
+
+-- Helper: naik ke atas tree dari sebuah element, cari ancestor Frame/container
+local function getAncestorContainer(inst, maxLevels)
+    maxLevels = maxLevels or 6
+    local current = inst.Parent
+    local level = 0
+    while current and level < maxLevels do
+        if current:IsA("ScreenGui") then return current end
+        if current:IsA("Frame") or current:IsA("SurfaceGui") or current:IsA("BillboardGui") then
+            return current
+        end
+        current = current.Parent
+        level = level + 1
+    end
+    return inst.Parent
+end
+
 local function scanForLetter()
-    -- Cari semua TextLabel di PlayerGui yang mengandung pola "Hurufnya adalah"
     local detected = nil
     
-    -- Scan semua ScreenGui kecuali GUI kita sendiri
+    -- STRATEGI: Cari teks "Hurufnya adalah" dulu sebagai anchor,
+    -- lalu cari huruf tunggal di dekatnya (sibling, child, atau nearby)
+    
     for _, gui in ipairs(playerGui:GetChildren()) do
         if gui:IsA("ScreenGui") and gui.Name ~= "SambungKataGUI" then
-            -- Recursive search semua descendants
-            for _, desc in ipairs(gui:GetDescendants()) do
-                if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Visible then
-                    local text = desc.Text
-                    if text then
-                        -- Pattern 1: "Hurufnya adalah: X" atau "Hurufnya adalah : X"
-                        local letter = text:match("[Hh]urufnya%s+adalah%s*:?%s*(%a)")
+            local allTexts = getAllTextElements(gui)
+            
+            -- PASS 1: Cari element yang mengandung "Hurufnya adalah"
+            local anchorElement = nil
+            local anchorText = nil
+            
+            for _, elem in ipairs(allTexts) do
+                if elem.Text and isEffectivelyVisible(elem) then
+                    local t = elem.Text
+                    
+                    -- Cek apakah mengandung "Hurufnya adalah" (case insensitive)
+                    if t:lower():find("hurufnya%s+adalah") or t:lower():find("hurufnya adalah") then
+                        anchorElement = elem
+                        anchorText = t
+                        
+                        -- Coba extract huruf langsung dari teks ini
+                        -- Pattern: "Hurufnya adalah: F" atau "Hurufnya adalah : F"
+                        local letter = t:match("[Hh]urufnya%s+adalah%s*:?%s*(%u)")
                         if letter then
                             detected = letter:upper()
                             break
                         end
-                        
-                        -- Pattern 2: "Huruf: X"
-                        letter = text:match("[Hh]uruf%s*:%s*(%a)")
+                        -- Pattern: huruf di akhir setelah spasi/tanda baca
+                        letter = t:match("%s(%u)%s*$")
                         if letter then
                             detected = letter:upper()
                             break
                         end
-                        
-                        -- Pattern 3: Cari TextLabel yang isinya cuma 1 huruf besar
-                        -- dan parent-nya ada teks "Hurufnya" atau "huruf"
-                        if #text == 1 and text:match("%a") then
-                            -- Cek apakah ada sibling/parent yang contain "huruf"
-                            local parent = desc.Parent
-                            if parent then
-                                for _, sibling in ipairs(parent:GetChildren()) do
-                                    if sibling ~= desc and (sibling:IsA("TextLabel") or sibling:IsA("TextButton")) then
-                                        if sibling.Text and sibling.Text:lower():find("huruf") then
-                                            detected = text:upper()
+                        break -- anchor ditemukan, lanjut cari huruf di sekitarnya
+                    end
+                end
+            end
+            
+            -- Jika anchor ditemukan tapi huruf belum, cari huruf di sekitar anchor
+            if anchorElement and not detected then
+                -- Cari di parent langsung
+                local parent = anchorElement.Parent
+                if parent then
+                    for _, child in ipairs(parent:GetChildren()) do
+                        if child ~= anchorElement and (child:IsA("TextLabel") or child:IsA("TextButton")) then
+                            local ct = child.Text
+                            if ct and #ct == 1 and ct:match("%a") and isEffectivelyVisible(child) then
+                                detected = ct:upper()
+                                break
+                            end
+                        end
+                    end
+                end
+                
+                -- Jika masih belum, cari di grandparent (naik 1 level)
+                if not detected and parent and parent.Parent then
+                    local grandparent = parent.Parent
+                    for _, desc in ipairs(grandparent:GetDescendants()) do
+                        if desc ~= anchorElement and (desc:IsA("TextLabel") or desc:IsA("TextButton")) then
+                            local ct = desc.Text
+                            if ct and #ct == 1 and ct:match("%a") and isEffectivelyVisible(desc) then
+                                detected = ct:upper()
+                                break
+                            end
+                        end
+                    end
+                end
+                
+                -- Naik terus sampai 4 level jika masih belum
+                if not detected then
+                    local searchRoot = anchorElement.Parent
+                    for level = 1, 4 do
+                        if not searchRoot or searchRoot:IsA("ScreenGui") then break end
+                        searchRoot = searchRoot.Parent
+                        if searchRoot then
+                            for _, desc in ipairs(searchRoot:GetDescendants()) do
+                                if desc ~= anchorElement and (desc:IsA("TextLabel") or desc:IsA("TextButton")) then
+                                    local ct = desc.Text
+                                    if ct and #ct == 1 and ct:match("%u") and isEffectivelyVisible(desc) then
+                                        detected = ct:upper()
+                                        break
+                                    end
+                                end
+                            end
+                            if detected then break end
+                        end
+                    end
+                end
+            end
+            
+            -- PASS 2: Jika masih belum, cari pattern "Huruf: X" atau "Huruf : X"
+            if not detected then
+                for _, elem in ipairs(allTexts) do
+                    if elem.Text and isEffectivelyVisible(elem) then
+                        local letter = elem.Text:match("[Hh]uruf%s*:%s*(%u)")
+                        if letter then
+                            detected = letter:upper()
+                            break
+                        end
+                    end
+                end
+            end
+            
+            -- PASS 3: Cari element yang punya "Waktu Bermain" sebagai konteks game
+            -- lalu cari huruf tunggal di dekatnya
+            if not detected then
+                for _, elem in ipairs(allTexts) do
+                    if elem.Text and elem.Text:lower():find("waktu bermain") and isEffectivelyVisible(elem) then
+                        -- Game sambung kata terdeteksi! Cari huruf di container yang sama
+                        local container = getAncestorContainer(elem, 4)
+                        if container then
+                            for _, desc in ipairs(container:GetDescendants()) do
+                                if (desc:IsA("TextLabel") or desc:IsA("TextButton")) then
+                                    local ct = desc.Text
+                                    -- Cari TextLabel yang berisi tepat 1 huruf kapital
+                                    -- dan ukurannya cukup besar (biasanya huruf yg ditampilkan besar)
+                                    if ct and #ct == 1 and ct:match("%u") and isEffectivelyVisible(desc) then
+                                        -- Cek apakah font size cukup besar (huruf utama biasanya besar)
+                                        if desc.TextSize >= 20 then
+                                            detected = ct:upper()
+                                            break
+                                        end
+                                    end
+                                end
+                            end
+                            -- Fallback: ambil huruf tunggal pertama yang ditemukan
+                            if not detected then
+                                for _, desc in ipairs(container:GetDescendants()) do
+                                    if (desc:IsA("TextLabel") or desc:IsA("TextButton")) then
+                                        local ct = desc.Text
+                                        if ct and #ct == 1 and ct:match("%u") and isEffectivelyVisible(desc) then
+                                            detected = ct:upper()
                                             break
                                         end
                                     end
                                 end
                             end
                         end
-                        
-                        if detected then break end
+                        break
                     end
                 end
             end
+            
+            if detected then break end
         end
-        if detected then break end
     end
     
     return detected
