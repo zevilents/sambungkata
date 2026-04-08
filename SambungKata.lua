@@ -113,6 +113,9 @@ local isChainMode = false
 local isTyping = false         -- Apakah sedang auto-typing
 local stopTyping = false       -- Flag untuk menghentikan typing
 local lastTypedPrefix = ""     -- Prefix terakhir yang user ketik
+local autoDetectEnabled = true -- Auto detect huruf dari game
+local lastDetectedLetter = "" -- Huruf terakhir yang terdeteksi
+local isScanning = false       -- Apakah sedang scanning
 
 ------------------------------------------------------------
 -- UTILITY
@@ -181,6 +184,66 @@ local function getActiveWordCount()
     end
     return count
 end
+
+------------------------------------------------------------
+-- AUTO-DETECT LETTER FROM GAME UI
+------------------------------------------------------------
+local function scanForLetter()
+    -- Cari semua TextLabel di PlayerGui yang mengandung pola "Hurufnya adalah"
+    local detected = nil
+    
+    -- Scan semua ScreenGui kecuali GUI kita sendiri
+    for _, gui in ipairs(playerGui:GetChildren()) do
+        if gui:IsA("ScreenGui") and gui.Name ~= "SambungKataGUI" then
+            -- Recursive search semua descendants
+            for _, desc in ipairs(gui:GetDescendants()) do
+                if (desc:IsA("TextLabel") or desc:IsA("TextButton")) and desc.Visible then
+                    local text = desc.Text
+                    if text then
+                        -- Pattern 1: "Hurufnya adalah: X" atau "Hurufnya adalah : X"
+                        local letter = text:match("[Hh]urufnya%s+adalah%s*:?%s*(%a)")
+                        if letter then
+                            detected = letter:upper()
+                            break
+                        end
+                        
+                        -- Pattern 2: "Huruf: X"
+                        letter = text:match("[Hh]uruf%s*:%s*(%a)")
+                        if letter then
+                            detected = letter:upper()
+                            break
+                        end
+                        
+                        -- Pattern 3: Cari TextLabel yang isinya cuma 1 huruf besar
+                        -- dan parent-nya ada teks "Hurufnya" atau "huruf"
+                        if #text == 1 and text:match("%a") then
+                            -- Cek apakah ada sibling/parent yang contain "huruf"
+                            local parent = desc.Parent
+                            if parent then
+                                for _, sibling in ipairs(parent:GetChildren()) do
+                                    if sibling ~= desc and (sibling:IsA("TextLabel") or sibling:IsA("TextButton")) then
+                                        if sibling.Text and sibling.Text:lower():find("huruf") then
+                                            detected = text:upper()
+                                            break
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                        
+                        if detected then break end
+                    end
+                end
+            end
+        end
+        if detected then break end
+    end
+    
+    return detected
+end
+
+-- Forward declaration untuk UI update (akan di-set nanti)
+local updateDetectStatus = nil
 
 ------------------------------------------------------------
 -- AUTOTYPE ENGINE (VirtualInputManager)
@@ -556,10 +619,139 @@ ScoreLabel.Visible = false
 ScoreLabel.Parent = ModeRow
 Instance.new("UICorner", ScoreLabel).CornerRadius = UDim.new(0, 8)
 
+-- ---- ROW 1.5: Auto-Detect status bar ----
+local DetectRow = Instance.new("Frame")
+DetectRow.Size = UDim2.new(1, 0, 0, 28)
+DetectRow.Position = UDim2.new(0, 0, 0, 37)
+DetectRow.BackgroundTransparency = 1
+DetectRow.Parent = GamePage
+
+-- Auto-detect toggle
+local DetectToggle = Instance.new("TextButton")
+DetectToggle.Name = "DetectToggle"
+DetectToggle.Size = UDim2.new(0, 110, 1, 0)
+DetectToggle.Position = UDim2.new(0, 0, 0, 0)
+DetectToggle.BackgroundColor3 = Color3.fromRGB(0, 188, 212)
+DetectToggle.BackgroundTransparency = 0.2
+DetectToggle.Text = "📷 Auto-Detect"
+DetectToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+DetectToggle.TextSize = 10
+DetectToggle.Font = Enum.Font.GothamBold
+DetectToggle.BorderSizePixel = 0
+DetectToggle.AutoButtonColor = false
+DetectToggle.Parent = DetectRow
+Instance.new("UICorner", DetectToggle).CornerRadius = UDim.new(0, 7)
+
+local DetectToggleStroke = Instance.new("UIStroke", DetectToggle)
+DetectToggleStroke.Color = Color3.fromRGB(0, 188, 212)
+DetectToggleStroke.Transparency = 0.3
+DetectToggleStroke.Thickness = 1
+
+-- Detected letter display
+local DetectStatusBg = Instance.new("Frame")
+DetectStatusBg.Size = UDim2.new(0, 180, 1, 0)
+DetectStatusBg.Position = UDim2.new(0, 116, 0, 0)
+DetectStatusBg.BackgroundColor3 = Color3.fromRGB(25, 30, 35)
+DetectStatusBg.BorderSizePixel = 0
+DetectStatusBg.Parent = DetectRow
+Instance.new("UICorner", DetectStatusBg).CornerRadius = UDim.new(0, 7)
+
+local DetectStatusStroke = Instance.new("UIStroke", DetectStatusBg)
+DetectStatusStroke.Color = Color3.fromRGB(50, 60, 70)
+DetectStatusStroke.Transparency = 0.5
+DetectStatusStroke.Thickness = 1
+
+local DetectStatusLabel = Instance.new("TextLabel")
+DetectStatusLabel.Name = "DetectStatus"
+DetectStatusLabel.Size = UDim2.new(1, -10, 1, 0)
+DetectStatusLabel.Position = UDim2.new(0, 8, 0, 0)
+DetectStatusLabel.BackgroundTransparency = 1
+DetectStatusLabel.Text = "🔎 Menunggu huruf..."
+DetectStatusLabel.TextColor3 = Color3.fromRGB(90, 100, 120)
+DetectStatusLabel.TextSize = 10
+DetectStatusLabel.Font = Enum.Font.Gotham
+DetectStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+DetectStatusLabel.Parent = DetectStatusBg
+
+-- Detected letter big badge
+local DetectLetterBadge = Instance.new("TextLabel")
+DetectLetterBadge.Name = "DetectLetter"
+DetectLetterBadge.Size = UDim2.new(0, 28, 1, 0)
+DetectLetterBadge.Position = UDim2.new(1, -28, 0, 0)
+DetectLetterBadge.BackgroundColor3 = Color3.fromRGB(0, 188, 212)
+DetectLetterBadge.BackgroundTransparency = 0.3
+DetectLetterBadge.Text = "?"
+DetectLetterBadge.TextColor3 = Color3.fromRGB(255, 255, 255)
+DetectLetterBadge.TextSize = 14
+DetectLetterBadge.Font = Enum.Font.GothamBold
+DetectLetterBadge.Parent = DetectRow
+Instance.new("UICorner", DetectLetterBadge).CornerRadius = UDim.new(0, 7)
+
+-- Implement updateDetectStatus
+updateDetectStatus = function(letter)
+    if letter then
+        DetectStatusLabel.Text = "✅ Terdeteksi: " .. letter
+        DetectStatusLabel.TextColor3 = Color3.fromRGB(76, 175, 80)
+        DetectLetterBadge.Text = letter
+        DetectLetterBadge.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
+        -- Flash effect on badge
+        createTween(DetectLetterBadge, {BackgroundTransparency = 0}, 0.1):Play()
+        task.delay(0.2, function()
+            createTween(DetectLetterBadge, {BackgroundTransparency = 0.3}, 0.3):Play()
+        end)
+    else
+        DetectStatusLabel.Text = "🔎 Menunggu huruf..."
+        DetectStatusLabel.TextColor3 = Color3.fromRGB(90, 100, 120)
+        DetectLetterBadge.Text = "?"
+        DetectLetterBadge.BackgroundColor3 = Color3.fromRGB(0, 188, 212)
+    end
+end
+
+local function updateDetectToggleVisuals()
+    if autoDetectEnabled then
+        createTween(DetectToggle, {
+            BackgroundTransparency = 0.2,
+            TextColor3 = Color3.fromRGB(255, 255, 255)
+        }, 0.15):Play()
+        DetectToggle.Text = "📷 Auto-Detect"
+        createTween(DetectToggleStroke, {Transparency = 0.3}, 0.15):Play()
+    else
+        createTween(DetectToggle, {
+            BackgroundTransparency = 0.85,
+            TextColor3 = Color3.fromRGB(100, 100, 140)
+        }, 0.15):Play()
+        DetectToggle.Text = "📷 Detect OFF"
+        createTween(DetectToggleStroke, {Transparency = 0.85}, 0.15):Play()
+    end
+end
+
+DetectToggle.MouseButton1Click:Connect(function()
+    autoDetectEnabled = not autoDetectEnabled
+    updateDetectToggleVisuals()
+    if autoDetectEnabled then
+        print("[SambungKata] Auto-Detect ON")
+    else
+        print("[SambungKata] Auto-Detect OFF")
+        updateDetectStatus(nil)
+        lastDetectedLetter = ""
+    end
+end)
+
+DetectToggle.MouseEnter:Connect(function()
+    if not autoDetectEnabled then
+        createTween(DetectToggle, {BackgroundTransparency = 0.55}, 0.1):Play()
+    end
+end)
+DetectToggle.MouseLeave:Connect(function()
+    if not autoDetectEnabled then
+        createTween(DetectToggle, {BackgroundTransparency = 0.85}, 0.1):Play()
+    end
+end)
+
 -- ---- ROW 2: Difficulty toggles ----
 local DiffRow = Instance.new("Frame")
 DiffRow.Size = UDim2.new(1, 0, 0, 34)
-DiffRow.Position = UDim2.new(0, 0, 0, 40)
+DiffRow.Position = UDim2.new(0, 0, 0, 68)
 DiffRow.BackgroundTransparency = 1
 DiffRow.Parent = GamePage
 
@@ -614,7 +806,7 @@ WordCountLabel.Parent = DiffRow
 -- ---- ROW 2.5: Speed toggle buttons ----
 local SpeedRow = Instance.new("Frame")
 SpeedRow.Size = UDim2.new(1, 0, 0, 28)
-SpeedRow.Position = UDim2.new(0, 0, 0, 78)
+SpeedRow.Position = UDim2.new(0, 0, 0, 106)
 SpeedRow.BackgroundTransparency = 1
 SpeedRow.Parent = GamePage
 
@@ -709,7 +901,7 @@ end
 local ChainInfo = Instance.new("Frame")
 ChainInfo.Name = "ChainInfo"
 ChainInfo.Size = UDim2.new(1, 0, 0, 50)
-ChainInfo.Position = UDim2.new(0, 0, 0, 110)
+ChainInfo.Position = UDim2.new(0, 0, 0, 138)
 ChainInfo.BackgroundColor3 = Color3.fromRGB(25, 25, 38)
 ChainInfo.BorderSizePixel = 0
 ChainInfo.Visible = false
@@ -762,7 +954,7 @@ Instance.new("UICorner", NewChainBtn).CornerRadius = UDim.new(0, 6)
 local SearchFrame = Instance.new("Frame")
 SearchFrame.Name = "SearchFrame"
 SearchFrame.Size = UDim2.new(1, 0, 0, 40)
-SearchFrame.Position = UDim2.new(0, 0, 0, 110)
+SearchFrame.Position = UDim2.new(0, 0, 0, 138)
 SearchFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 38)
 SearchFrame.BorderSizePixel = 0
 SearchFrame.Parent = GamePage
@@ -911,18 +1103,18 @@ local function updateLayout()
     if isChainMode then
         ChainInfo.Visible = true
         ScoreLabel.Visible = true
-        ChainInfo.Position = UDim2.new(0, 0, 0, 110)
-        SearchFrame.Position = UDim2.new(0, 0, 0, 166)
-        TypingBar.Position = UDim2.new(0, 0, 0, 210)
-        ResultsFrame.Position = UDim2.new(0, 0, 0, 212)
-        ResultsFrame.Size = UDim2.new(1, 0, 1, -214)
+        ChainInfo.Position = UDim2.new(0, 0, 0, 138)
+        SearchFrame.Position = UDim2.new(0, 0, 0, 194)
+        TypingBar.Position = UDim2.new(0, 0, 0, 238)
+        ResultsFrame.Position = UDim2.new(0, 0, 0, 240)
+        ResultsFrame.Size = UDim2.new(1, 0, 1, -242)
     else
         ChainInfo.Visible = false
         ScoreLabel.Visible = false
-        SearchFrame.Position = UDim2.new(0, 0, 0, 110)
-        TypingBar.Position = UDim2.new(0, 0, 0, 154)
-        ResultsFrame.Position = UDim2.new(0, 0, 0, 156)
-        ResultsFrame.Size = UDim2.new(1, 0, 1, -158)
+        SearchFrame.Position = UDim2.new(0, 0, 0, 138)
+        TypingBar.Position = UDim2.new(0, 0, 0, 182)
+        ResultsFrame.Position = UDim2.new(0, 0, 0, 184)
+        ResultsFrame.Size = UDim2.new(1, 0, 1, -186)
     end
 end
 
@@ -1366,4 +1558,38 @@ end)
 print("═══════════════════════════════════════════")
 print("  🔤 SAMBUNG KATA - KBBI Edition")
 print("  Right Shift = Show/Hide")
+print("  Auto-Detect = Scan huruf dari game")
 print("═══════════════════════════════════════════")
+
+------------------------------------------------------------
+-- AUTO-DETECT LOOP (berjalan di background)
+------------------------------------------------------------
+task.spawn(function()
+    while ScreenGui and ScreenGui.Parent do
+        if isLoaded and autoDetectEnabled and not isTyping then
+            local letter = scanForLetter()
+            
+            if letter and letter ~= lastDetectedLetter then
+                lastDetectedLetter = letter
+                print("[SambungKata] 📷 Terdeteksi huruf: " .. letter)
+                
+                -- Update status UI
+                if updateDetectStatus then
+                    updateDetectStatus(letter)
+                end
+                
+                -- Auto-fill search input dengan huruf yang terdeteksi
+                SearchInput.Text = letter:lower()
+                lastTypedPrefix = letter:lower()
+                
+                -- Trigger search
+                task.delay(0.15, function()
+                    local results = searchWords(letter:lower(), MAX_RESULTS)
+                    displayResults(results)
+                end)
+            end
+        end
+        
+        task.wait(0.5) -- Scan setiap 0.5 detik
+    end
+end)
