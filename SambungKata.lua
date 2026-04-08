@@ -253,15 +253,15 @@ local function scanForLetter()
                         anchorText = t
                         
                         -- Coba extract huruf langsung dari teks ini
-                        -- Pattern: "Hurufnya adalah: F" atau "Hurufnya adalah : F"
-                        local letter = t:match("[Hh]urufnya%s+adalah%s*:?%s*(%u)")
-                        if letter then
+                        -- Pattern: "Hurufnya adalah: F" atau "Hurufnya adalah : DI"
+                        local letter = t:match("[Hh]urufnya%s+adalah%s*:?%s*(%a+)")
+                        if letter and #letter >= 1 and #letter <= 3 then
                             detected = letter:upper()
                             break
                         end
                         -- Pattern: huruf di akhir setelah spasi/tanda baca
-                        letter = t:match("%s(%u)%s*$")
-                        if letter then
+                        letter = t:match("%s(%a+)%s*$")
+                        if letter and #letter >= 1 and #letter <= 3 then
                             detected = letter:upper()
                             break
                         end
@@ -278,7 +278,7 @@ local function scanForLetter()
                     for _, child in ipairs(parent:GetChildren()) do
                         if child ~= anchorElement and (child:IsA("TextLabel") or child:IsA("TextButton")) then
                             local ct = child.Text
-                            if ct and #ct == 1 and ct:match("%a") and isEffectivelyVisible(child) then
+                            if ct and #ct >= 1 and #ct <= 3 and ct:match("^%a+$") and isEffectivelyVisible(child) then
                                 detected = ct:upper()
                                 break
                             end
@@ -292,7 +292,7 @@ local function scanForLetter()
                     for _, desc in ipairs(grandparent:GetDescendants()) do
                         if desc ~= anchorElement and (desc:IsA("TextLabel") or desc:IsA("TextButton")) then
                             local ct = desc.Text
-                            if ct and #ct == 1 and ct:match("%a") and isEffectivelyVisible(desc) then
+                            if ct and #ct >= 1 and #ct <= 3 and ct:match("^%a+$") and isEffectivelyVisible(desc) then
                                 detected = ct:upper()
                                 break
                             end
@@ -310,7 +310,7 @@ local function scanForLetter()
                             for _, desc in ipairs(searchRoot:GetDescendants()) do
                                 if desc ~= anchorElement and (desc:IsA("TextLabel") or desc:IsA("TextButton")) then
                                     local ct = desc.Text
-                                    if ct and #ct == 1 and ct:match("%u") and isEffectivelyVisible(desc) then
+                                    if ct and #ct >= 1 and #ct <= 3 and ct:match("^%a+$") and isEffectivelyVisible(desc) then
                                         detected = ct:upper()
                                         break
                                     end
@@ -326,8 +326,8 @@ local function scanForLetter()
             if not detected then
                 for _, elem in ipairs(allTexts) do
                     if elem.Text and isEffectivelyVisible(elem) then
-                        local letter = elem.Text:match("[Hh]uruf%s*:%s*(%u)")
-                        if letter then
+                        local letter = elem.Text:match("[Hh]uruf%s*:%s*(%a+)")
+                        if letter and #letter >= 1 and #letter <= 3 then
                             detected = letter:upper()
                             break
                         end
@@ -346,9 +346,9 @@ local function scanForLetter()
                             for _, desc in ipairs(container:GetDescendants()) do
                                 if (desc:IsA("TextLabel") or desc:IsA("TextButton")) then
                                     local ct = desc.Text
-                                    -- Cari TextLabel yang berisi tepat 1 huruf kapital
+                                    -- Cari TextLabel yang berisi tepat 1-3 huruf kapital
                                     -- dan ukurannya cukup besar (biasanya huruf yg ditampilkan besar)
-                                    if ct and #ct == 1 and ct:match("%u") and isEffectivelyVisible(desc) then
+                                    if ct and #ct >= 1 and #ct <= 3 and ct:match("^%a+$") and isEffectivelyVisible(desc) then
                                         -- Cek apakah font size cukup besar (huruf utama biasanya besar)
                                         if desc.TextSize >= 20 then
                                             detected = ct:upper()
@@ -362,7 +362,7 @@ local function scanForLetter()
                                 for _, desc in ipairs(container:GetDescendants()) do
                                     if (desc:IsA("TextLabel") or desc:IsA("TextButton")) then
                                         local ct = desc.Text
-                                        if ct and #ct == 1 and ct:match("%u") and isEffectivelyVisible(desc) then
+                                        if ct and #ct >= 1 and #ct <= 3 and ct:match("^%a+$") and isEffectivelyVisible(desc) then
                                             detected = ct:upper()
                                             break
                                         end
