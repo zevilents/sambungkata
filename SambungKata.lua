@@ -9,7 +9,7 @@
     1. Upload file kbbi.txt ke GitHub repository kamu
     2. Ganti URL_KBBI di bawah dengan raw link GitHub kamu
     3. Inject script ini via executor (Synapse, Fluxus, dll)
-    4. Pilih tingkat kesulitan
+    4. Toggle on/off tingkat kesulitan sesuai keinginan
     5. Ketik huruf awal, script akan menampilkan kata lanjutan
     
     TINGKAT KESULITAN (berdasarkan huruf akhir kata):
@@ -22,12 +22,10 @@
 ------------------------------------------------------------
 -- CONFIG
 ------------------------------------------------------------
--- GANTI URL INI DENGAN RAW LINK GITHUB KAMU!
--- Contoh: "https://raw.githubusercontent.com/username/repo/main/kbbi.txt"
 local URL_KBBI = "https://raw.githubusercontent.com/zevilents/sambungkata/main/kbbi.txt"
 
-local MAX_RESULTS = 50        -- Maksimal kata yang ditampilkan per pencarian
-local CHAIN_LENGTH = 2        -- Jumlah huruf akhir yang dipakai untuk sambung kata (2 huruf terakhir)
+local MAX_RESULTS = 50
+local CHAIN_LENGTH = 2
 
 ------------------------------------------------------------
 -- DIFFICULTY DEFINITIONS
@@ -35,27 +33,27 @@ local CHAIN_LENGTH = 2        -- Jumlah huruf akhir yang dipakai untuk sambung k
 local DIFFICULTY = {
     Mudah = {
         letters = { ["a"] = true, ["i"] = true, ["u"] = true, ["e"] = true, ["o"] = true },
-        color = Color3.fromRGB(76, 175, 80),     -- Hijau
+        color = Color3.fromRGB(76, 175, 80),
         icon = "🟢",
-        desc = "Akhiran vokal (a, i, u, e, o)"
+        shortDesc = "a i u e o"
     },
     Normal = {
         letters = { ["n"] = true, ["r"] = true, ["s"] = true, ["k"] = true, ["t"] = true, ["l"] = true },
-        color = Color3.fromRGB(33, 150, 243),     -- Biru
+        color = Color3.fromRGB(33, 150, 243),
         icon = "🔵",
-        desc = "Akhiran konsonan umum (n, r, s, k, t, l)"
+        shortDesc = "n r s k t l"
     },
     Sulit = {
         letters = { ["b"] = true, ["d"] = true, ["g"] = true, ["h"] = true, ["p"] = true, ["m"] = true },
-        color = Color3.fromRGB(255, 152, 0),      -- Oranye
+        color = Color3.fromRGB(255, 152, 0),
         icon = "🟠",
-        desc = "Akhiran konsonan keras (b, d, g, h, p, m)"
+        shortDesc = "b d g h p m"
     },
     Ekstrim = {
         letters = { ["v"] = true, ["w"] = true, ["x"] = true, ["y"] = true, ["z"] = true, ["j"] = true, ["c"] = true },
-        color = Color3.fromRGB(244, 67, 54),      -- Merah
+        color = Color3.fromRGB(244, 67, 54),
         icon = "🔴",
-        desc = "Akhiran langka (v, w, x, y, z, j, c)"
+        shortDesc = "v w x y z j c"
     }
 }
 
@@ -73,32 +71,38 @@ local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 ------------------------------------------------------------
--- CLEANUP (hapus GUI lama jika di-re-inject)
+-- CLEANUP
 ------------------------------------------------------------
 local oldGui = playerGui:FindFirstChild("SambungKataGUI")
 if oldGui then oldGui:Destroy() end
 
 ------------------------------------------------------------
--- DATA STORAGE
+-- DATA
 ------------------------------------------------------------
-local allWords = {}           -- Semua kata dari KBBI
-local wordsByDifficulty = {   -- Kata dikelompokkan per kesulitan
+local allWords = {}
+local wordsByDifficulty = {
     Mudah = {},
     Normal = {},
     Sulit = {},
-    Ekstrim = {},
-    Lainnya = {}
+    Ekstrim = {}
 }
-local currentDifficulty = nil -- Kesulitan yang dipilih
-local currentWords = {}       -- Kata-kata yang aktif (sesuai kesulitan)
-local chainHistory = {}       -- Riwayat kata yang sudah dipakai
-local currentChainWord = nil  -- Kata terakhir dalam chain
+
+-- Toggle state: which difficulties are ON
+local difficultyEnabled = {
+    Mudah = true,
+    Normal = true,
+    Sulit = false,
+    Ekstrim = false
+}
+
+local chainHistory = {}
+local currentChainWord = nil
 local score = 0
 local isLoaded = false
-local isGameActive = false    -- apakah mode game chain aktif
+local isChainMode = false
 
 ------------------------------------------------------------
--- UTILITY FUNCTIONS
+-- UTILITY
 ------------------------------------------------------------
 local function getLastChar(word)
     return string.sub(word, -1):lower()
@@ -106,9 +110,7 @@ end
 
 local function getLastChars(word, n)
     n = n or CHAIN_LENGTH
-    if #word < n then
-        return word:lower()
-    end
+    if #word < n then return word:lower() end
     return string.sub(word, -n):lower()
 end
 
@@ -119,7 +121,7 @@ local function getDifficultyOfWord(word)
             return diffName
         end
     end
-    return "Lainnya"
+    return nil
 end
 
 local function startsWith(word, prefix)
@@ -127,105 +129,121 @@ local function startsWith(word, prefix)
 end
 
 local function createTween(obj, props, duration, style, direction)
-    local tween = TweenService:Create(obj, TweenInfo.new(
+    return TweenService:Create(obj, TweenInfo.new(
         duration or 0.3,
         style or Enum.EasingStyle.Quart,
         direction or Enum.EasingDirection.Out
     ), props)
-    return tween
 end
 
 local function formatNumber(n)
-    local formatted = tostring(n)
+    local s = tostring(n)
     local k
     while true do
-        formatted, k = string.gsub(formatted, "^(-?%d+)(%d%d%d)", '%1.%2')
+        s, k = string.gsub(s, "^(-?%d+)(%d%d%d)", '%1.%2')
         if k == 0 then break end
     end
-    return formatted
+    return s
+end
+
+-- Build active word list from enabled difficulties
+local function getActiveWords()
+    local words = {}
+    for _, diffName in ipairs(DIFFICULTY_ORDER) do
+        if difficultyEnabled[diffName] then
+            for _, w in ipairs(wordsByDifficulty[diffName]) do
+                table.insert(words, w)
+            end
+        end
+    end
+    return words
+end
+
+local function getActiveWordCount()
+    local count = 0
+    for _, diffName in ipairs(DIFFICULTY_ORDER) do
+        if difficultyEnabled[diffName] then
+            count = count + #wordsByDifficulty[diffName]
+        end
+    end
+    return count
 end
 
 ------------------------------------------------------------
--- FETCH & PARSE KBBI DATA
+-- FETCH KBBI
 ------------------------------------------------------------
 local function fetchKBBI()
     local success, result = pcall(function()
-        -- Executor biasanya support game:HttpGet
         if game.HttpGet then
             return game:HttpGet(URL_KBBI)
         else
-            -- Fallback: HttpService (hanya untuk testing di studio)
             return HttpService:GetAsync(URL_KBBI)
         end
     end)
-    
+
     if not success then
         warn("[SambungKata] Gagal fetch KBBI: " .. tostring(result))
-        warn("[SambungKata] Pastikan URL_KBBI sudah benar!")
         return false
     end
-    
-    -- Parse kata per baris
+
     local count = 0
     for line in result:gmatch("[^\r\n]+") do
-        local word = line:match("^%s*(.-)%s*$") -- trim whitespace
+        local word = line:match("^%s*(.-)%s*$")
         if word and #word > 0 then
             word = word:lower()
-            -- Hanya ambil kata yang valid (huruf saja, tanpa spasi/simbol)
             if word:match("^[a-z]+$") then
                 table.insert(allWords, word)
                 local diff = getDifficultyOfWord(word)
-                if wordsByDifficulty[diff] then
+                if diff and wordsByDifficulty[diff] then
                     table.insert(wordsByDifficulty[diff], word)
                 end
                 count = count + 1
             end
         end
     end
-    
-    print("[SambungKata] Berhasil memuat " .. formatNumber(count) .. " kata dari KBBI!")
-    print("[SambungKata] Mudah: " .. formatNumber(#wordsByDifficulty.Mudah) .. " kata")
-    print("[SambungKata] Normal: " .. formatNumber(#wordsByDifficulty.Normal) .. " kata")
-    print("[SambungKata] Sulit: " .. formatNumber(#wordsByDifficulty.Sulit) .. " kata")
-    print("[SambungKata] Ekstrim: " .. formatNumber(#wordsByDifficulty.Ekstrim) .. " kata")
-    
+
+    print("[SambungKata] Berhasil memuat " .. formatNumber(count) .. " kata!")
+    for _, d in ipairs(DIFFICULTY_ORDER) do
+        print("  " .. d .. ": " .. formatNumber(#wordsByDifficulty[d]))
+    end
     return true
 end
 
 ------------------------------------------------------------
--- SEARCH FUNCTION
+-- SEARCH
 ------------------------------------------------------------
-local function searchWords(prefix, wordList, maxResults)
+local function searchWords(prefix, maxResults)
     maxResults = maxResults or MAX_RESULTS
     local results = {}
     prefix = prefix:lower()
-    
     if #prefix == 0 then return results end
-    
-    for _, word in ipairs(wordList) do
-        if startsWith(word, prefix) then
-            -- Jangan masukkan kata yang sudah dipakai di chain
-            local alreadyUsed = false
-            for _, usedWord in ipairs(chainHistory) do
-                if usedWord == word then
-                    alreadyUsed = true
-                    break
-                end
-            end
-            if not alreadyUsed then
-                table.insert(results, word)
-                if #results >= maxResults then
-                    break
+
+    -- Search through enabled difficulty lists
+    for _, diffName in ipairs(DIFFICULTY_ORDER) do
+        if difficultyEnabled[diffName] then
+            for _, word in ipairs(wordsByDifficulty[diffName]) do
+                if startsWith(word, prefix) then
+                    -- Skip used words in chain mode
+                    local skip = false
+                    if isChainMode then
+                        for _, used in ipairs(chainHistory) do
+                            if used == word then skip = true; break end
+                        end
+                    end
+                    if not skip then
+                        table.insert(results, word)
+                        if #results >= maxResults then return results end
+                    end
                 end
             end
         end
     end
-    
+
     return results
 end
 
 ------------------------------------------------------------
--- GUI CREATION
+-- GUI
 ------------------------------------------------------------
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "SambungKataGUI"
@@ -233,585 +251,610 @@ ScreenGui.ResetOnSpawn = false
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 ScreenGui.Parent = playerGui
 
--- ==================== MAIN FRAME ====================
+-- ============ MAIN FRAME ============
 local MainFrame = Instance.new("Frame")
 MainFrame.Name = "MainFrame"
-MainFrame.Size = UDim2.new(0, 480, 0, 600)
-MainFrame.Position = UDim2.new(0.5, -240, 0.5, -300)
-MainFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+MainFrame.Size = UDim2.new(0, 500, 0, 620)
+MainFrame.Position = UDim2.new(0.5, -250, 0.5, -310)
+MainFrame.BackgroundColor3 = Color3.fromRGB(16, 16, 22)
 MainFrame.BorderSizePixel = 0
 MainFrame.ClipsDescendants = true
 MainFrame.Parent = ScreenGui
 
-local MainCorner = Instance.new("UICorner")
-MainCorner.CornerRadius = UDim.new(0, 16)
-MainCorner.Parent = MainFrame
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 14)
 
-local MainStroke = Instance.new("UIStroke")
-MainStroke.Color = Color3.fromRGB(60, 60, 90)
-MainStroke.Thickness = 1.5
-MainStroke.Parent = MainFrame
+local MainStroke = Instance.new("UIStroke", MainFrame)
+MainStroke.Color = Color3.fromRGB(50, 50, 75)
+MainStroke.Thickness = 1
 
--- Gradient accent line di atas
-local AccentLine = Instance.new("Frame")
-AccentLine.Name = "AccentLine"
-AccentLine.Size = UDim2.new(1, 0, 0, 3)
-AccentLine.Position = UDim2.new(0, 0, 0, 0)
-AccentLine.BorderSizePixel = 0
-AccentLine.Parent = MainFrame
+-- Gradient accent top bar
+local AccentBar = Instance.new("Frame")
+AccentBar.Size = UDim2.new(1, 0, 0, 3)
+AccentBar.BorderSizePixel = 0
+AccentBar.Parent = MainFrame
 
-local AccentGradient = Instance.new("UIGradient")
-AccentGradient.Color = ColorSequence.new({
+local AccentGrad = Instance.new("UIGradient", AccentBar)
+AccentGrad.Color = ColorSequence.new({
     ColorSequenceKeypoint.new(0, Color3.fromRGB(76, 175, 80)),
     ColorSequenceKeypoint.new(0.33, Color3.fromRGB(33, 150, 243)),
     ColorSequenceKeypoint.new(0.66, Color3.fromRGB(255, 152, 0)),
     ColorSequenceKeypoint.new(1, Color3.fromRGB(244, 67, 54))
 })
-AccentGradient.Parent = AccentLine
 
--- ==================== TITLE BAR ====================
+-- ============ TITLE BAR ============
 local TitleBar = Instance.new("Frame")
 TitleBar.Name = "TitleBar"
-TitleBar.Size = UDim2.new(1, 0, 0, 50)
+TitleBar.Size = UDim2.new(1, 0, 0, 44)
 TitleBar.Position = UDim2.new(0, 0, 0, 3)
 TitleBar.BackgroundTransparency = 1
 TitleBar.Parent = MainFrame
 
 local TitleLabel = Instance.new("TextLabel")
-TitleLabel.Name = "Title"
-TitleLabel.Size = UDim2.new(1, -50, 1, 0)
-TitleLabel.Position = UDim2.new(0, 16, 0, 0)
+TitleLabel.Size = UDim2.new(1, -90, 1, 0)
+TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = "🔤 SAMBUNG KATA"
-TitleLabel.TextColor3 = Color3.fromRGB(240, 240, 255)
-TitleLabel.TextSize = 20
+TitleLabel.TextColor3 = Color3.fromRGB(235, 235, 255)
+TitleLabel.TextSize = 18
 TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
 TitleLabel.Parent = TitleBar
 
-local SubTitle = Instance.new("TextLabel")
-SubTitle.Name = "SubTitle"
-SubTitle.Size = UDim2.new(1, -50, 0, 16)
-SubTitle.Position = UDim2.new(0, 16, 1, -18)
-SubTitle.BackgroundTransparency = 1
-SubTitle.Text = "KBBI Edition"
-SubTitle.TextColor3 = Color3.fromRGB(120, 120, 160)
-SubTitle.TextSize = 11
-SubTitle.Font = Enum.Font.Gotham
-SubTitle.TextXAlignment = Enum.TextXAlignment.Left
-SubTitle.Parent = TitleBar
-
--- Close Button
+-- Close
 local CloseBtn = Instance.new("TextButton")
-CloseBtn.Name = "CloseBtn"
-CloseBtn.Size = UDim2.new(0, 36, 0, 36)
-CloseBtn.Position = UDim2.new(1, -44, 0, 7)
+CloseBtn.Size = UDim2.new(0, 32, 0, 32)
+CloseBtn.Position = UDim2.new(1, -40, 0, 6)
 CloseBtn.BackgroundColor3 = Color3.fromRGB(244, 67, 54)
 CloseBtn.BackgroundTransparency = 0.85
 CloseBtn.Text = "✕"
 CloseBtn.TextColor3 = Color3.fromRGB(244, 67, 54)
-CloseBtn.TextSize = 16
+CloseBtn.TextSize = 14
 CloseBtn.Font = Enum.Font.GothamBold
 CloseBtn.BorderSizePixel = 0
 CloseBtn.Parent = TitleBar
+Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 8)
 
-local CloseBtnCorner = Instance.new("UICorner")
-CloseBtnCorner.CornerRadius = UDim.new(0, 8)
-CloseBtnCorner.Parent = CloseBtn
-
--- Minimize Button
+-- Minimize
 local MinBtn = Instance.new("TextButton")
-MinBtn.Name = "MinBtn"
-MinBtn.Size = UDim2.new(0, 36, 0, 36)
-MinBtn.Position = UDim2.new(1, -84, 0, 7)
+MinBtn.Size = UDim2.new(0, 32, 0, 32)
+MinBtn.Position = UDim2.new(1, -76, 0, 6)
 MinBtn.BackgroundColor3 = Color3.fromRGB(255, 193, 7)
 MinBtn.BackgroundTransparency = 0.85
 MinBtn.Text = "—"
 MinBtn.TextColor3 = Color3.fromRGB(255, 193, 7)
-MinBtn.TextSize = 16
+MinBtn.TextSize = 14
 MinBtn.Font = Enum.Font.GothamBold
 MinBtn.BorderSizePixel = 0
 MinBtn.Parent = TitleBar
+Instance.new("UICorner", MinBtn).CornerRadius = UDim.new(0, 8)
 
-local MinBtnCorner = Instance.new("UICorner")
-MinBtnCorner.CornerRadius = UDim.new(0, 8)
-MinBtnCorner.Parent = MinBtn
+-- Separator
+local Sep = Instance.new("Frame")
+Sep.Size = UDim2.new(1, -28, 0, 1)
+Sep.Position = UDim2.new(0, 14, 0, 47)
+Sep.BackgroundColor3 = Color3.fromRGB(36, 36, 52)
+Sep.BorderSizePixel = 0
+Sep.Parent = MainFrame
 
--- ==================== SEPARATOR ====================
-local Sep1 = Instance.new("Frame")
-Sep1.Size = UDim2.new(1, -32, 0, 1)
-Sep1.Position = UDim2.new(0, 16, 0, 53)
-Sep1.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
-Sep1.BorderSizePixel = 0
-Sep1.Parent = MainFrame
+-- ============ CONTENT ============
+local Content = Instance.new("Frame")
+Content.Name = "Content"
+Content.Size = UDim2.new(1, -28, 1, -54)
+Content.Position = UDim2.new(0, 14, 0, 51)
+Content.BackgroundTransparency = 1
+Content.ClipsDescendants = true
+Content.Parent = MainFrame
 
--- ==================== CONTENT AREA ====================
-local ContentFrame = Instance.new("Frame")
-ContentFrame.Name = "ContentFrame"
-ContentFrame.Size = UDim2.new(1, -32, 1, -60)
-ContentFrame.Position = UDim2.new(0, 16, 0, 56)
-ContentFrame.BackgroundTransparency = 1
-ContentFrame.ClipsDescendants = true
-ContentFrame.Parent = MainFrame
-
--- ==================== LOADING PAGE ====================
+-- ============ LOADING PAGE ============
 local LoadingPage = Instance.new("Frame")
 LoadingPage.Name = "LoadingPage"
 LoadingPage.Size = UDim2.new(1, 0, 1, 0)
 LoadingPage.BackgroundTransparency = 1
-LoadingPage.Parent = ContentFrame
+LoadingPage.Parent = Content
 
-local LoadingIcon = Instance.new("TextLabel")
-LoadingIcon.Size = UDim2.new(1, 0, 0, 60)
-LoadingIcon.Position = UDim2.new(0, 0, 0.3, -30)
-LoadingIcon.BackgroundTransparency = 1
-LoadingIcon.Text = "📚"
-LoadingIcon.TextSize = 48
-LoadingIcon.Font = Enum.Font.GothamBold
-LoadingIcon.Parent = LoadingPage
+local LdIcon = Instance.new("TextLabel")
+LdIcon.Size = UDim2.new(1, 0, 0, 50)
+LdIcon.Position = UDim2.new(0, 0, 0.35, -25)
+LdIcon.BackgroundTransparency = 1
+LdIcon.Text = "📚"
+LdIcon.TextSize = 42
+LdIcon.Font = Enum.Font.GothamBold
+LdIcon.Parent = LoadingPage
 
-local LoadingText = Instance.new("TextLabel")
-LoadingText.Name = "LoadingText"
-LoadingText.Size = UDim2.new(1, 0, 0, 30)
-LoadingText.Position = UDim2.new(0, 0, 0.3, 35)
-LoadingText.BackgroundTransparency = 1
-LoadingText.Text = "Memuat kamus KBBI..."
-LoadingText.TextColor3 = Color3.fromRGB(180, 180, 220)
-LoadingText.TextSize = 16
-LoadingText.Font = Enum.Font.Gotham
-LoadingText.Parent = LoadingPage
+local LdText = Instance.new("TextLabel")
+LdText.Name = "LdText"
+LdText.Size = UDim2.new(1, 0, 0, 24)
+LdText.Position = UDim2.new(0, 0, 0.35, 30)
+LdText.BackgroundTransparency = 1
+LdText.Text = "Memuat kamus KBBI..."
+LdText.TextColor3 = Color3.fromRGB(160, 160, 200)
+LdText.TextSize = 15
+LdText.Font = Enum.Font.Gotham
+LdText.Parent = LoadingPage
 
-local LoadingBar = Instance.new("Frame")
-LoadingBar.Size = UDim2.new(0.6, 0, 0, 4)
-LoadingBar.Position = UDim2.new(0.2, 0, 0.3, 75)
-LoadingBar.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
-LoadingBar.BorderSizePixel = 0
-LoadingBar.Parent = LoadingPage
+local LdBarBg = Instance.new("Frame")
+LdBarBg.Size = UDim2.new(0.55, 0, 0, 4)
+LdBarBg.Position = UDim2.new(0.225, 0, 0.35, 65)
+LdBarBg.BackgroundColor3 = Color3.fromRGB(36, 36, 52)
+LdBarBg.BorderSizePixel = 0
+LdBarBg.Parent = LoadingPage
+Instance.new("UICorner", LdBarBg).CornerRadius = UDim.new(0, 2)
 
-local LoadingBarCorner = Instance.new("UICorner")
-LoadingBarCorner.CornerRadius = UDim.new(0, 2)
-LoadingBarCorner.Parent = LoadingBar
+local LdBarFill = Instance.new("Frame")
+LdBarFill.Size = UDim2.new(0, 0, 1, 0)
+LdBarFill.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
+LdBarFill.BorderSizePixel = 0
+LdBarFill.Parent = LdBarBg
+Instance.new("UICorner", LdBarFill).CornerRadius = UDim.new(0, 2)
 
-local LoadingBarFill = Instance.new("Frame")
-LoadingBarFill.Size = UDim2.new(0, 0, 1, 0)
-LoadingBarFill.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
-LoadingBarFill.BorderSizePixel = 0
-LoadingBarFill.Parent = LoadingBar
-
-local LoadingBarFillCorner = Instance.new("UICorner")
-LoadingBarFillCorner.CornerRadius = UDim.new(0, 2)
-LoadingBarFillCorner.Parent = LoadingBarFill
-
--- ==================== DIFFICULTY SELECT PAGE ====================
-local DifficultyPage = Instance.new("Frame")
-DifficultyPage.Name = "DifficultyPage"
-DifficultyPage.Size = UDim2.new(1, 0, 1, 0)
-DifficultyPage.BackgroundTransparency = 1
-DifficultyPage.Visible = false
-DifficultyPage.Parent = ContentFrame
-
-local DiffTitle = Instance.new("TextLabel")
-DiffTitle.Size = UDim2.new(1, 0, 0, 30)
-DiffTitle.Position = UDim2.new(0, 0, 0, 5)
-DiffTitle.BackgroundTransparency = 1
-DiffTitle.Text = "Pilih Tingkat Kesulitan"
-DiffTitle.TextColor3 = Color3.fromRGB(220, 220, 255)
-DiffTitle.TextSize = 18
-DiffTitle.Font = Enum.Font.GothamBold
-DiffTitle.Parent = DifficultyPage
-
-local DiffDesc = Instance.new("TextLabel")
-DiffDesc.Size = UDim2.new(1, 0, 0, 20)
-DiffDesc.Position = UDim2.new(0, 0, 0, 35)
-DiffDesc.BackgroundTransparency = 1
-DiffDesc.Text = "Kesulitan menentukan huruf akhir kata yang tersedia"
-DiffDesc.TextColor3 = Color3.fromRGB(120, 120, 160)
-DiffDesc.TextSize = 12
-DiffDesc.Font = Enum.Font.Gotham
-DiffDesc.Parent = DifficultyPage
-
--- Mode Selection
-local ModeFrame = Instance.new("Frame")
-ModeFrame.Name = "ModeFrame"
-ModeFrame.Size = UDim2.new(1, 0, 0, 40)
-ModeFrame.Position = UDim2.new(0, 0, 0, 65)
-ModeFrame.BackgroundTransparency = 1
-ModeFrame.Parent = DifficultyPage
-
-local ModeFreeBtn = Instance.new("TextButton")
-ModeFreeBtn.Name = "ModeFreeBtn"
-ModeFreeBtn.Size = UDim2.new(0.48, 0, 1, 0)
-ModeFreeBtn.Position = UDim2.new(0, 0, 0, 0)
-ModeFreeBtn.BackgroundColor3 = Color3.fromRGB(33, 150, 243)
-ModeFreeBtn.BackgroundTransparency = 0.15
-ModeFreeBtn.Text = "🔍 Mode Cari Kata"
-ModeFreeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-ModeFreeBtn.TextSize = 13
-ModeFreeBtn.Font = Enum.Font.GothamBold
-ModeFreeBtn.BorderSizePixel = 0
-ModeFreeBtn.Parent = ModeFrame
-
-local ModeFreeBtnCorner = Instance.new("UICorner")
-ModeFreeBtnCorner.CornerRadius = UDim.new(0, 10)
-ModeFreeBtnCorner.Parent = ModeFreeBtn
-
-local ModeChainBtn = Instance.new("TextButton")
-ModeChainBtn.Name = "ModeChainBtn"
-ModeChainBtn.Size = UDim2.new(0.48, 0, 1, 0)
-ModeChainBtn.Position = UDim2.new(0.52, 0, 0, 0)
-ModeChainBtn.BackgroundColor3 = Color3.fromRGB(156, 39, 176)
-ModeChainBtn.BackgroundTransparency = 0.15
-ModeChainBtn.Text = "🔗 Mode Sambung Kata"
-ModeChainBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-ModeChainBtn.TextSize = 13
-ModeChainBtn.Font = Enum.Font.GothamBold
-ModeChainBtn.BorderSizePixel = 0
-ModeChainBtn.Parent = ModeFrame
-
-local ModeChainBtnCorner = Instance.new("UICorner")
-ModeChainBtnCorner.CornerRadius = UDim.new(0, 10)
-ModeChainBtnCorner.Parent = ModeChainBtn
-
--- Difficulty Buttons Container
-local DiffBtnContainer = Instance.new("Frame")
-DiffBtnContainer.Name = "DiffBtnContainer"
-DiffBtnContainer.Size = UDim2.new(1, 0, 0, 330)
-DiffBtnContainer.Position = UDim2.new(0, 0, 0, 115)
-DiffBtnContainer.BackgroundTransparency = 1
-DiffBtnContainer.Parent = DifficultyPage
-
-local selectedMode = "search" -- "search" atau "chain"
-
-local diffButtons = {}
-
-for i, diffName in ipairs(DIFFICULTY_ORDER) do
-    local diff = DIFFICULTY[diffName]
-    
-    local btn = Instance.new("TextButton")
-    btn.Name = "Diff_" .. diffName
-    btn.Size = UDim2.new(1, 0, 0, 72)
-    btn.Position = UDim2.new(0, 0, 0, (i - 1) * 80)
-    btn.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
-    btn.BorderSizePixel = 0
-    btn.Text = ""
-    btn.AutoButtonColor = false
-    btn.Parent = DiffBtnContainer
-    
-    local btnCorner = Instance.new("UICorner")
-    btnCorner.CornerRadius = UDim.new(0, 12)
-    btnCorner.Parent = btn
-    
-    local btnStroke = Instance.new("UIStroke")
-    btnStroke.Color = diff.color
-    btnStroke.Transparency = 0.7
-    btnStroke.Thickness = 1
-    btnStroke.Parent = btn
-    
-    -- Color indicator bar
-    local colorBar = Instance.new("Frame")
-    colorBar.Size = UDim2.new(0, 4, 0.6, 0)
-    colorBar.Position = UDim2.new(0, 12, 0.2, 0)
-    colorBar.BackgroundColor3 = diff.color
-    colorBar.BorderSizePixel = 0
-    colorBar.Parent = btn
-    
-    local colorBarCorner = Instance.new("UICorner")
-    colorBarCorner.CornerRadius = UDim.new(0, 2)
-    colorBarCorner.Parent = colorBar
-    
-    -- Difficulty name
-    local nameLabel = Instance.new("TextLabel")
-    nameLabel.Size = UDim2.new(0.5, -30, 0, 24)
-    nameLabel.Position = UDim2.new(0, 28, 0, 12)
-    nameLabel.BackgroundTransparency = 1
-    nameLabel.Text = diff.icon .. " " .. diffName
-    nameLabel.TextColor3 = diff.color
-    nameLabel.TextSize = 17
-    nameLabel.Font = Enum.Font.GothamBold
-    nameLabel.TextXAlignment = Enum.TextXAlignment.Left
-    nameLabel.Parent = btn
-    
-    -- Description
-    local descLabel = Instance.new("TextLabel")
-    descLabel.Size = UDim2.new(1, -30, 0, 16)
-    descLabel.Position = UDim2.new(0, 28, 0, 38)
-    descLabel.BackgroundTransparency = 1
-    descLabel.Text = diff.desc
-    descLabel.TextColor3 = Color3.fromRGB(120, 120, 160)
-    descLabel.TextSize = 11
-    descLabel.Font = Enum.Font.Gotham
-    descLabel.TextXAlignment = Enum.TextXAlignment.Left
-    descLabel.Parent = btn
-    
-    -- Word count (akan diupdate setelah load)
-    local countLabel = Instance.new("TextLabel")
-    countLabel.Name = "CountLabel"
-    countLabel.Size = UDim2.new(0.35, 0, 0, 20)
-    countLabel.Position = UDim2.new(0.65, -10, 0, 14)
-    countLabel.BackgroundTransparency = 1
-    countLabel.Text = "..."
-    countLabel.TextColor3 = Color3.fromRGB(100, 100, 140)
-    countLabel.TextSize = 12
-    countLabel.Font = Enum.Font.Gotham
-    countLabel.TextXAlignment = Enum.TextXAlignment.Right
-    countLabel.Parent = btn
-    
-    -- Hover effects
-    btn.MouseEnter:Connect(function()
-        createTween(btn, {BackgroundColor3 = Color3.fromRGB(38, 38, 55)}, 0.2):Play()
-        createTween(btnStroke, {Transparency = 0.3}, 0.2):Play()
-    end)
-    
-    btn.MouseLeave:Connect(function()
-        createTween(btn, {BackgroundColor3 = Color3.fromRGB(28, 28, 40)}, 0.2):Play()
-        createTween(btnStroke, {Transparency = 0.7}, 0.2):Play()
-    end)
-    
-    diffButtons[diffName] = btn
-end
-
--- All Difficulty button
-local AllBtn = Instance.new("TextButton")
-AllBtn.Name = "Diff_Semua"
-AllBtn.Size = UDim2.new(1, 0, 0, 42)
-AllBtn.Position = UDim2.new(0, 0, 0, #DIFFICULTY_ORDER * 80)
-AllBtn.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
-AllBtn.BorderSizePixel = 0
-AllBtn.Text = ""
-AllBtn.AutoButtonColor = false
-AllBtn.Parent = DiffBtnContainer
-
-local AllBtnCorner = Instance.new("UICorner")
-AllBtnCorner.CornerRadius = UDim.new(0, 12)
-AllBtnCorner.Parent = AllBtn
-
-local AllBtnStroke = Instance.new("UIStroke")
-AllBtnStroke.Color = Color3.fromRGB(180, 180, 220)
-AllBtnStroke.Transparency = 0.7
-AllBtnStroke.Thickness = 1
-AllBtnStroke.Parent = AllBtn
-
-local AllNameLabel = Instance.new("TextLabel")
-AllNameLabel.Size = UDim2.new(0.6, 0, 1, 0)
-AllNameLabel.Position = UDim2.new(0, 16, 0, 0)
-AllNameLabel.BackgroundTransparency = 1
-AllNameLabel.Text = "⚪ Semua Kata"
-AllNameLabel.TextColor3 = Color3.fromRGB(200, 200, 240)
-AllNameLabel.TextSize = 15
-AllNameLabel.Font = Enum.Font.GothamBold
-AllNameLabel.TextXAlignment = Enum.TextXAlignment.Left
-AllNameLabel.Parent = AllBtn
-
-local AllCountLabel = Instance.new("TextLabel")
-AllCountLabel.Name = "CountLabel"
-AllCountLabel.Size = UDim2.new(0.35, 0, 1, 0)
-AllCountLabel.Position = UDim2.new(0.65, -10, 0, 0)
-AllCountLabel.BackgroundTransparency = 1
-AllCountLabel.Text = "..."
-AllCountLabel.TextColor3 = Color3.fromRGB(100, 100, 140)
-AllCountLabel.TextSize = 12
-AllCountLabel.Font = Enum.Font.Gotham
-AllCountLabel.TextXAlignment = Enum.TextXAlignment.Right
-AllCountLabel.Parent = AllBtn
-
-AllBtn.MouseEnter:Connect(function()
-    createTween(AllBtn, {BackgroundColor3 = Color3.fromRGB(38, 38, 55)}, 0.2):Play()
-end)
-AllBtn.MouseLeave:Connect(function()
-    createTween(AllBtn, {BackgroundColor3 = Color3.fromRGB(28, 28, 40)}, 0.2):Play()
-end)
-
--- ==================== GAME PAGE (SEARCH MODE) ====================
+-- ============ GAME PAGE ============
 local GamePage = Instance.new("Frame")
 GamePage.Name = "GamePage"
 GamePage.Size = UDim2.new(1, 0, 1, 0)
 GamePage.BackgroundTransparency = 1
 GamePage.Visible = false
-GamePage.Parent = ContentFrame
+GamePage.Parent = Content
 
--- Top info bar
-local TopBar = Instance.new("Frame")
-TopBar.Size = UDim2.new(1, 0, 0, 36)
-TopBar.BackgroundTransparency = 1
-TopBar.Parent = GamePage
+-- ---- ROW 1: Mode toggle + Score ----
+local ModeRow = Instance.new("Frame")
+ModeRow.Size = UDim2.new(1, 0, 0, 34)
+ModeRow.BackgroundTransparency = 1
+ModeRow.Parent = GamePage
 
-local BackBtn = Instance.new("TextButton")
-BackBtn.Size = UDim2.new(0, 36, 0, 36)
-BackBtn.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
-BackBtn.Text = "←"
-BackBtn.TextColor3 = Color3.fromRGB(180, 180, 220)
-BackBtn.TextSize = 18
-BackBtn.Font = Enum.Font.GothamBold
-BackBtn.BorderSizePixel = 0
-BackBtn.Parent = TopBar
+-- Mode: Search
+local ModeSearchBtn = Instance.new("TextButton")
+ModeSearchBtn.Name = "ModeSearch"
+ModeSearchBtn.Size = UDim2.new(0, 130, 1, 0)
+ModeSearchBtn.Position = UDim2.new(0, 0, 0, 0)
+ModeSearchBtn.BackgroundColor3 = Color3.fromRGB(33, 150, 243)
+ModeSearchBtn.BackgroundTransparency = 0.15
+ModeSearchBtn.Text = "🔍 Cari Kata"
+ModeSearchBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ModeSearchBtn.TextSize = 12
+ModeSearchBtn.Font = Enum.Font.GothamBold
+ModeSearchBtn.BorderSizePixel = 0
+ModeSearchBtn.AutoButtonColor = false
+ModeSearchBtn.Parent = ModeRow
+Instance.new("UICorner", ModeSearchBtn).CornerRadius = UDim.new(0, 8)
 
-local BackBtnCorner = Instance.new("UICorner")
-BackBtnCorner.CornerRadius = UDim.new(0, 8)
-BackBtnCorner.Parent = BackBtn
+-- Mode: Chain
+local ModeChainBtn = Instance.new("TextButton")
+ModeChainBtn.Name = "ModeChain"
+ModeChainBtn.Size = UDim2.new(0, 148, 1, 0)
+ModeChainBtn.Position = UDim2.new(0, 136, 0, 0)
+ModeChainBtn.BackgroundColor3 = Color3.fromRGB(156, 39, 176)
+ModeChainBtn.BackgroundTransparency = 0.7
+ModeChainBtn.Text = "🔗 Sambung Kata"
+ModeChainBtn.TextColor3 = Color3.fromRGB(200, 200, 240)
+ModeChainBtn.TextSize = 12
+ModeChainBtn.Font = Enum.Font.GothamBold
+ModeChainBtn.BorderSizePixel = 0
+ModeChainBtn.AutoButtonColor = false
+ModeChainBtn.Parent = ModeRow
+Instance.new("UICorner", ModeChainBtn).CornerRadius = UDim.new(0, 8)
 
-local DiffBadge = Instance.new("TextLabel")
-DiffBadge.Name = "DiffBadge"
-DiffBadge.Size = UDim2.new(0, 120, 0, 28)
-DiffBadge.Position = UDim2.new(0, 44, 0, 4)
-DiffBadge.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
-DiffBadge.Text = ""
-DiffBadge.TextColor3 = Color3.fromRGB(200, 200, 240)
-DiffBadge.TextSize = 13
-DiffBadge.Font = Enum.Font.GothamBold
-DiffBadge.Parent = TopBar
-
-local DiffBadgeCorner = Instance.new("UICorner")
-DiffBadgeCorner.CornerRadius = UDim.new(0, 8)
-DiffBadgeCorner.Parent = DiffBadge
-
+-- Score label
 local ScoreLabel = Instance.new("TextLabel")
 ScoreLabel.Name = "ScoreLabel"
-ScoreLabel.Size = UDim2.new(0, 120, 0, 28)
-ScoreLabel.Position = UDim2.new(1, -120, 0, 4)
+ScoreLabel.Size = UDim2.new(0, 100, 1, 0)
+ScoreLabel.Position = UDim2.new(1, -100, 0, 0)
 ScoreLabel.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
 ScoreLabel.Text = "Skor: 0"
 ScoreLabel.TextColor3 = Color3.fromRGB(255, 215, 0)
 ScoreLabel.TextSize = 13
 ScoreLabel.Font = Enum.Font.GothamBold
-ScoreLabel.Parent = TopBar
-ScoreLabel.Visible = false -- hanya tampil di mode chain
+ScoreLabel.Visible = false
+ScoreLabel.Parent = ModeRow
+Instance.new("UICorner", ScoreLabel).CornerRadius = UDim.new(0, 8)
 
-local ScoreCorner = Instance.new("UICorner")
-ScoreCorner.CornerRadius = UDim.new(0, 8)
-ScoreCorner.Parent = ScoreLabel
+-- ---- ROW 2: Difficulty toggles ----
+local DiffRow = Instance.new("Frame")
+DiffRow.Size = UDim2.new(1, 0, 0, 34)
+DiffRow.Position = UDim2.new(0, 0, 0, 40)
+DiffRow.BackgroundTransparency = 1
+DiffRow.Parent = GamePage
 
--- Mode Label
-local ModeLabel = Instance.new("TextLabel")
-ModeLabel.Name = "ModeLabel"
-ModeLabel.Size = UDim2.new(0, 160, 0, 28)
-ModeLabel.Position = UDim2.new(1, -160, 0, 4)
-ModeLabel.BackgroundTransparency = 1
-ModeLabel.Text = "🔍 Mode Cari"
-ModeLabel.TextColor3 = Color3.fromRGB(120, 120, 160)
-ModeLabel.TextSize = 12
-ModeLabel.Font = Enum.Font.Gotham
-ModeLabel.TextXAlignment = Enum.TextXAlignment.Right
-ModeLabel.Parent = TopBar
+local toggleButtons = {}
+local toggleXOffset = 0
 
--- Chain info (untuk mode chain)
+for i, diffName in ipairs(DIFFICULTY_ORDER) do
+    local diff = DIFFICULTY[diffName]
+    local isOn = difficultyEnabled[diffName]
+
+    -- Calculate width based on text
+    local labelText = diff.icon .. " " .. diffName
+    local btnWidth = #labelText * 7 + 30 -- approximate
+
+    local toggle = Instance.new("TextButton")
+    toggle.Name = "Toggle_" .. diffName
+    toggle.Size = UDim2.new(0, btnWidth, 1, 0)
+    toggle.Position = UDim2.new(0, toggleXOffset, 0, 0)
+    toggle.BackgroundColor3 = diff.color
+    toggle.BackgroundTransparency = isOn and 0.2 or 0.85
+    toggle.Text = labelText
+    toggle.TextColor3 = isOn and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(120, 120, 150)
+    toggle.TextSize = 11
+    toggle.Font = Enum.Font.GothamBold
+    toggle.BorderSizePixel = 0
+    toggle.AutoButtonColor = false
+    toggle.Parent = DiffRow
+    Instance.new("UICorner", toggle).CornerRadius = UDim.new(0, 8)
+
+    local stroke = Instance.new("UIStroke", toggle)
+    stroke.Color = diff.color
+    stroke.Transparency = isOn and 0.3 or 0.8
+    stroke.Thickness = 1
+
+    toggleButtons[diffName] = { button = toggle, stroke = stroke }
+    toggleXOffset = toggleXOffset + btnWidth + 6
+end
+
+-- Word count indicator
+local WordCountLabel = Instance.new("TextLabel")
+WordCountLabel.Name = "WordCount"
+WordCountLabel.Size = UDim2.new(0, 80, 1, 0)
+WordCountLabel.Position = UDim2.new(1, -80, 0, 0)
+WordCountLabel.BackgroundTransparency = 1
+WordCountLabel.Text = "0 kata"
+WordCountLabel.TextColor3 = Color3.fromRGB(90, 90, 130)
+WordCountLabel.TextSize = 10
+WordCountLabel.Font = Enum.Font.Gotham
+WordCountLabel.TextXAlignment = Enum.TextXAlignment.Right
+WordCountLabel.Parent = DiffRow
+
+-- ---- ROW 3: Chain info (only visible in chain mode) ----
 local ChainInfo = Instance.new("Frame")
 ChainInfo.Name = "ChainInfo"
-ChainInfo.Size = UDim2.new(1, 0, 0, 60)
-ChainInfo.Position = UDim2.new(0, 0, 0, 42)
-ChainInfo.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
+ChainInfo.Size = UDim2.new(1, 0, 0, 50)
+ChainInfo.Position = UDim2.new(0, 0, 0, 80)
+ChainInfo.BackgroundColor3 = Color3.fromRGB(25, 25, 38)
 ChainInfo.BorderSizePixel = 0
 ChainInfo.Visible = false
 ChainInfo.Parent = GamePage
+Instance.new("UICorner", ChainInfo).CornerRadius = UDim.new(0, 10)
 
-local ChainInfoCorner = Instance.new("UICorner")
-ChainInfoCorner.CornerRadius = UDim.new(0, 10)
-ChainInfoCorner.Parent = ChainInfo
+local ChainStroke = Instance.new("UIStroke", ChainInfo)
+ChainStroke.Color = Color3.fromRGB(156, 39, 176)
+ChainStroke.Transparency = 0.6
+ChainStroke.Thickness = 1
 
 local ChainWordLabel = Instance.new("TextLabel")
-ChainWordLabel.Name = "ChainWord"
-ChainWordLabel.Size = UDim2.new(1, -20, 0, 24)
-ChainWordLabel.Position = UDim2.new(0, 10, 0, 6)
+ChainWordLabel.Size = UDim2.new(1, -16, 0, 22)
+ChainWordLabel.Position = UDim2.new(0, 8, 0, 4)
 ChainWordLabel.BackgroundTransparency = 1
-ChainWordLabel.Text = "Kata saat ini: -"
+ChainWordLabel.Text = "Kata: -"
 ChainWordLabel.TextColor3 = Color3.fromRGB(220, 220, 255)
-ChainWordLabel.TextSize = 15
+ChainWordLabel.TextSize = 14
 ChainWordLabel.Font = Enum.Font.GothamBold
 ChainWordLabel.TextXAlignment = Enum.TextXAlignment.Left
 ChainWordLabel.Parent = ChainInfo
 
 local ChainHintLabel = Instance.new("TextLabel")
-ChainHintLabel.Name = "ChainHint"
-ChainHintLabel.Size = UDim2.new(1, -20, 0, 20)
-ChainHintLabel.Position = UDim2.new(0, 10, 0, 32)
+ChainHintLabel.Size = UDim2.new(1, -16, 0, 18)
+ChainHintLabel.Position = UDim2.new(0, 8, 0, 27)
 ChainHintLabel.BackgroundTransparency = 1
-ChainHintLabel.Text = 'Ketik kata yang dimulai dengan "..."'
+ChainHintLabel.Text = ""
 ChainHintLabel.TextColor3 = Color3.fromRGB(120, 120, 160)
-ChainHintLabel.TextSize = 12
+ChainHintLabel.TextSize = 11
 ChainHintLabel.Font = Enum.Font.Gotham
 ChainHintLabel.TextXAlignment = Enum.TextXAlignment.Left
 ChainHintLabel.Parent = ChainInfo
 
--- Search input
+-- New Chain button
+local NewChainBtn = Instance.new("TextButton")
+NewChainBtn.Size = UDim2.new(0, 24, 0, 24)
+NewChainBtn.Position = UDim2.new(1, -32, 0, 13)
+NewChainBtn.BackgroundColor3 = Color3.fromRGB(156, 39, 176)
+NewChainBtn.BackgroundTransparency = 0.6
+NewChainBtn.Text = "↻"
+NewChainBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+NewChainBtn.TextSize = 14
+NewChainBtn.Font = Enum.Font.GothamBold
+NewChainBtn.BorderSizePixel = 0
+NewChainBtn.Parent = ChainInfo
+Instance.new("UICorner", NewChainBtn).CornerRadius = UDim.new(0, 6)
+
+-- ---- ROW 4: Search bar ----
+-- Position will be adjusted dynamically based on chain mode
 local SearchFrame = Instance.new("Frame")
-SearchFrame.Size = UDim2.new(1, 0, 0, 44)
-SearchFrame.Position = UDim2.new(0, 0, 0, 42)
-SearchFrame.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
+SearchFrame.Name = "SearchFrame"
+SearchFrame.Size = UDim2.new(1, 0, 0, 40)
+SearchFrame.Position = UDim2.new(0, 0, 0, 80)
+SearchFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 38)
 SearchFrame.BorderSizePixel = 0
 SearchFrame.Parent = GamePage
+Instance.new("UICorner", SearchFrame).CornerRadius = UDim.new(0, 10)
 
-local SearchFrameCorner = Instance.new("UICorner")
-SearchFrameCorner.CornerRadius = UDim.new(0, 10)
-SearchFrameCorner.Parent = SearchFrame
+local SearchStroke = Instance.new("UIStroke", SearchFrame)
+SearchStroke.Color = Color3.fromRGB(50, 50, 75)
+SearchStroke.Thickness = 1
 
 local SearchIcon = Instance.new("TextLabel")
-SearchIcon.Size = UDim2.new(0, 30, 1, 0)
-SearchIcon.Position = UDim2.new(0, 10, 0, 0)
+SearchIcon.Size = UDim2.new(0, 28, 1, 0)
+SearchIcon.Position = UDim2.new(0, 8, 0, 0)
 SearchIcon.BackgroundTransparency = 1
 SearchIcon.Text = "🔍"
-SearchIcon.TextSize = 16
+SearchIcon.TextSize = 14
 SearchIcon.Font = Enum.Font.Gotham
 SearchIcon.Parent = SearchFrame
 
 local SearchInput = Instance.new("TextBox")
 SearchInput.Name = "SearchInput"
-SearchInput.Size = UDim2.new(1, -80, 1, -10)
-SearchInput.Position = UDim2.new(0, 42, 0, 5)
+SearchInput.Size = UDim2.new(1, -80, 1, -8)
+SearchInput.Position = UDim2.new(0, 38, 0, 4)
 SearchInput.BackgroundTransparency = 1
 SearchInput.Text = ""
 SearchInput.PlaceholderText = "Ketik huruf awal kata..."
-SearchInput.PlaceholderColor3 = Color3.fromRGB(80, 80, 120)
+SearchInput.PlaceholderColor3 = Color3.fromRGB(70, 70, 110)
 SearchInput.TextColor3 = Color3.fromRGB(220, 220, 255)
-SearchInput.TextSize = 15
+SearchInput.TextSize = 14
 SearchInput.Font = Enum.Font.Gotham
 SearchInput.TextXAlignment = Enum.TextXAlignment.Left
 SearchInput.ClearTextOnFocus = false
 SearchInput.Parent = SearchFrame
 
 local ResultCount = Instance.new("TextLabel")
-ResultCount.Name = "ResultCount"
-ResultCount.Size = UDim2.new(0, 40, 1, 0)
-ResultCount.Position = UDim2.new(1, -48, 0, 0)
+ResultCount.Size = UDim2.new(0, 36, 1, 0)
+ResultCount.Position = UDim2.new(1, -42, 0, 0)
 ResultCount.BackgroundTransparency = 1
-ResultCount.Text = "0"
-ResultCount.TextColor3 = Color3.fromRGB(100, 100, 140)
-ResultCount.TextSize = 12
+ResultCount.Text = ""
+ResultCount.TextColor3 = Color3.fromRGB(90, 90, 130)
+ResultCount.TextSize = 11
 ResultCount.Font = Enum.Font.Gotham
 ResultCount.Parent = SearchFrame
 
--- Results area
+-- ---- ROW 5: Results ----
 local ResultsFrame = Instance.new("ScrollingFrame")
-ResultsFrame.Name = "ResultsFrame"
-ResultsFrame.Size = UDim2.new(1, 0, 1, -96)
-ResultsFrame.Position = UDim2.new(0, 0, 0, 92)
+ResultsFrame.Name = "Results"
+ResultsFrame.Size = UDim2.new(1, 0, 1, -126)
+ResultsFrame.Position = UDim2.new(0, 0, 0, 124)
 ResultsFrame.BackgroundTransparency = 1
 ResultsFrame.BorderSizePixel = 0
-ResultsFrame.ScrollBarThickness = 4
+ResultsFrame.ScrollBarThickness = 3
 ResultsFrame.ScrollBarImageColor3 = Color3.fromRGB(60, 60, 90)
 ResultsFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
 ResultsFrame.Parent = GamePage
 
 local ResultsLayout = Instance.new("UIListLayout")
 ResultsLayout.SortOrder = Enum.SortOrder.LayoutOrder
-ResultsLayout.Padding = UDim.new(0, 4)
+ResultsLayout.Padding = UDim.new(0, 3)
 ResultsLayout.Parent = ResultsFrame
 
--- Empty state
 local EmptyLabel = Instance.new("TextLabel")
 EmptyLabel.Name = "EmptyLabel"
-EmptyLabel.Size = UDim2.new(1, 0, 0, 100)
+EmptyLabel.Size = UDim2.new(1, 0, 0, 80)
 EmptyLabel.BackgroundTransparency = 1
 EmptyLabel.Text = "Ketik huruf untuk mencari kata..."
-EmptyLabel.TextColor3 = Color3.fromRGB(80, 80, 120)
-EmptyLabel.TextSize = 14
+EmptyLabel.TextColor3 = Color3.fromRGB(70, 70, 110)
+EmptyLabel.TextSize = 13
 EmptyLabel.Font = Enum.Font.Gotham
 EmptyLabel.Parent = ResultsFrame
 
 ------------------------------------------------------------
--- DRAGGING FUNCTIONALITY
+-- LAYOUT HELPERS
 ------------------------------------------------------------
-local dragging = false
-local dragStart = nil
-local startPos = nil
+local function updateLayout()
+    if isChainMode then
+        ChainInfo.Visible = true
+        ScoreLabel.Visible = true
+        SearchFrame.Position = UDim2.new(0, 0, 0, 136)
+        ResultsFrame.Position = UDim2.new(0, 0, 0, 182)
+        ResultsFrame.Size = UDim2.new(1, 0, 1, -184)
+    else
+        ChainInfo.Visible = false
+        ScoreLabel.Visible = false
+        SearchFrame.Position = UDim2.new(0, 0, 0, 80)
+        ResultsFrame.Position = UDim2.new(0, 0, 0, 126)
+        ResultsFrame.Size = UDim2.new(1, 0, 1, -128)
+    end
+end
+
+local function updateWordCount()
+    WordCountLabel.Text = formatNumber(getActiveWordCount()) .. " kata"
+end
+
+local function updateToggleVisuals()
+    for diffName, data in pairs(toggleButtons) do
+        local isOn = difficultyEnabled[diffName]
+        local diff = DIFFICULTY[diffName]
+        createTween(data.button, {
+            BackgroundTransparency = isOn and 0.2 or 0.85,
+            TextColor3 = isOn and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(100, 100, 140)
+        }, 0.2):Play()
+        createTween(data.stroke, {
+            Transparency = isOn and 0.3 or 0.85
+        }, 0.2):Play()
+    end
+    updateWordCount()
+end
+
+local function updateModeVisuals()
+    if isChainMode then
+        createTween(ModeSearchBtn, {BackgroundTransparency = 0.75, TextColor3 = Color3.fromRGB(150, 150, 190)}, 0.2):Play()
+        createTween(ModeChainBtn, {BackgroundTransparency = 0.15, TextColor3 = Color3.fromRGB(255, 255, 255)}, 0.2):Play()
+    else
+        createTween(ModeSearchBtn, {BackgroundTransparency = 0.15, TextColor3 = Color3.fromRGB(255, 255, 255)}, 0.2):Play()
+        createTween(ModeChainBtn, {BackgroundTransparency = 0.75, TextColor3 = Color3.fromRGB(150, 150, 190)}, 0.2):Play()
+    end
+end
+
+------------------------------------------------------------
+-- RESULTS DISPLAY
+------------------------------------------------------------
+local function clearResults()
+    for _, child in ipairs(ResultsFrame:GetChildren()) do
+        if child:IsA("TextButton") or (child:IsA("Frame") and child.Name ~= "EmptyLabel") then
+            child:Destroy()
+        end
+    end
+end
+
+local function createWordItem(word, index)
+    local diff = getDifficultyOfWord(word)
+    local diffData = diff and DIFFICULTY[diff]
+    local color = diffData and diffData.color or Color3.fromRGB(120, 120, 160)
+
+    local btn = Instance.new("TextButton")
+    btn.Name = "W" .. index
+    btn.Size = UDim2.new(1, 0, 0, 36)
+    btn.BackgroundColor3 = Color3.fromRGB(22, 22, 34)
+    btn.BorderSizePixel = 0
+    btn.Text = ""
+    btn.AutoButtonColor = false
+    btn.LayoutOrder = index
+    btn.Parent = ResultsFrame
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+
+    -- Left color bar
+    local bar = Instance.new("Frame")
+    bar.Size = UDim2.new(0, 3, 0.5, 0)
+    bar.Position = UDim2.new(0, 7, 0.25, 0)
+    bar.BackgroundColor3 = color
+    bar.BorderSizePixel = 0
+    bar.Parent = btn
+    Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 2)
+
+    -- Word
+    local wl = Instance.new("TextLabel")
+    wl.Size = UDim2.new(0.55, -18, 1, 0)
+    wl.Position = UDim2.new(0, 18, 0, 0)
+    wl.BackgroundTransparency = 1
+    wl.Text = word:upper()
+    wl.TextColor3 = Color3.fromRGB(220, 220, 255)
+    wl.TextSize = 13
+    wl.Font = Enum.Font.GothamBold
+    wl.TextXAlignment = Enum.TextXAlignment.Left
+    wl.Parent = btn
+
+    -- Difficulty badge
+    local badge = Instance.new("TextLabel")
+    badge.Size = UDim2.new(0, 60, 0, 20)
+    badge.Position = UDim2.new(1, -118, 0, 8)
+    badge.BackgroundColor3 = color
+    badge.BackgroundTransparency = 0.85
+    badge.Text = diff or "?"
+    badge.TextColor3 = color
+    badge.TextSize = 9
+    badge.Font = Enum.Font.GothamBold
+    badge.Parent = btn
+    Instance.new("UICorner", badge).CornerRadius = UDim.new(0, 5)
+
+    -- Length
+    local ll = Instance.new("TextLabel")
+    ll.Size = UDim2.new(0, 46, 0, 20)
+    ll.Position = UDim2.new(1, -52, 0, 8)
+    ll.BackgroundTransparency = 1
+    ll.Text = #word .. " huruf"
+    ll.TextColor3 = Color3.fromRGB(75, 75, 115)
+    ll.TextSize = 9
+    ll.Font = Enum.Font.Gotham
+    ll.TextXAlignment = Enum.TextXAlignment.Right
+    ll.Parent = btn
+
+    -- Hover
+    btn.MouseEnter:Connect(function()
+        createTween(btn, {BackgroundColor3 = Color3.fromRGB(32, 32, 48)}, 0.12):Play()
+    end)
+    btn.MouseLeave:Connect(function()
+        createTween(btn, {BackgroundColor3 = Color3.fromRGB(22, 22, 34)}, 0.12):Play()
+    end)
+
+    -- Click: chain mode
+    if isChainMode then
+        btn.MouseButton1Click:Connect(function()
+            table.insert(chainHistory, word)
+            currentChainWord = word
+            score = score + #word
+            ScoreLabel.Text = "Skor: " .. score
+
+            local lastC = getLastChars(word, CHAIN_LENGTH)
+            ChainWordLabel.Text = "🔗 " .. word:upper() .. "  ➜  sambung: " .. lastC:upper() .. "..."
+            ChainHintLabel.Text = "Riwayat: " .. #chainHistory .. " kata | kata berawalan \"" .. lastC:upper() .. "\""
+
+            SearchInput.Text = lastC
+            SearchInput:CaptureFocus()
+
+            -- flash
+            createTween(btn, {BackgroundColor3 = color}, 0.08):Play()
+            task.delay(0.12, function()
+                createTween(btn, {BackgroundColor3 = Color3.fromRGB(22, 22, 34)}, 0.15):Play()
+            end)
+        end)
+    end
+
+    -- Animate in
+    btn.BackgroundTransparency = 1
+    wl.TextTransparency = 1
+    task.delay(index * 0.015, function()
+        createTween(btn, {BackgroundTransparency = 0}, 0.15):Play()
+        createTween(wl, {TextTransparency = 0}, 0.15):Play()
+    end)
+
+    return btn
+end
+
+local function displayResults(results)
+    clearResults()
+
+    if #results == 0 then
+        EmptyLabel.Visible = true
+        EmptyLabel.Text = "Tidak ada kata ditemukan..."
+        ResultCount.Text = "0"
+        ResultsFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+        return
+    end
+
+    EmptyLabel.Visible = false
+    ResultCount.Text = tostring(#results)
+
+    for i, word in ipairs(results) do
+        createWordItem(word, i)
+    end
+
+    task.delay(0.1, function()
+        ResultsFrame.CanvasSize = UDim2.new(0, 0, 0, ResultsLayout.AbsoluteContentSize.Y + 8)
+    end)
+end
+
+------------------------------------------------------------
+-- CHAIN HELPERS
+------------------------------------------------------------
+local function startNewChain()
+    chainHistory = {}
+    score = 0
+    ScoreLabel.Text = "Skor: 0"
+
+    local activeWords = getActiveWords()
+    if #activeWords == 0 then
+        ChainWordLabel.Text = "⚠ Tidak ada kata! Aktifkan minimal 1 kesulitan"
+        ChainHintLabel.Text = ""
+        return
+    end
+
+    local startWord = activeWords[math.random(1, #activeWords)]
+    currentChainWord = startWord
+    table.insert(chainHistory, startWord)
+    score = score + #startWord
+    ScoreLabel.Text = "Skor: " .. score
+
+    local lastC = getLastChars(startWord, CHAIN_LENGTH)
+    ChainWordLabel.Text = "🔗 Mulai: " .. startWord:upper() .. "  ➜  sambung: " .. lastC:upper() .. "..."
+    ChainHintLabel.Text = "Ketik kata berawalan \"" .. lastC:upper() .. "\""
+
+    SearchInput.Text = lastC
+    clearResults()
+    EmptyLabel.Visible = true
+    EmptyLabel.Text = "Cari & klik kata untuk menyambung!"
+
+    task.delay(0.1, function()
+        SearchInput:CaptureFocus()
+    end)
+end
+
+------------------------------------------------------------
+-- DRAGGING
+------------------------------------------------------------
+local dragging, dragStart, startPos = false, nil, nil
 
 TitleBar.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
@@ -820,13 +863,11 @@ TitleBar.InputBegan:Connect(function(input)
         startPos = MainFrame.Position
     end
 end)
-
 TitleBar.InputEnded:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         dragging = false
     end
 end)
-
 UserInputService.InputChanged:Connect(function(input)
     if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
         local delta = input.Position - dragStart
@@ -838,367 +879,117 @@ UserInputService.InputChanged:Connect(function(input)
 end)
 
 ------------------------------------------------------------
--- UI FUNCTIONS
-------------------------------------------------------------
-local function clearResults()
-    for _, child in ipairs(ResultsFrame:GetChildren()) do
-        if child:IsA("TextButton") or (child:IsA("TextLabel") and child.Name ~= "EmptyLabel") then
-            child:Destroy()
-        end
-    end
-end
-
-local function createWordButton(word, index, isChainMode)
-    local diff = getDifficultyOfWord(word)
-    local diffData = DIFFICULTY[diff]
-    local color = diffData and diffData.color or Color3.fromRGB(150, 150, 180)
-    
-    local btn = Instance.new("TextButton")
-    btn.Name = "Word_" .. index
-    btn.Size = UDim2.new(1, -4, 0, 38)
-    btn.BackgroundColor3 = Color3.fromRGB(24, 24, 36)
-    btn.BorderSizePixel = 0
-    btn.Text = ""
-    btn.AutoButtonColor = false
-    btn.LayoutOrder = index
-    btn.Parent = ResultsFrame
-    
-    local btnCorner = Instance.new("UICorner")
-    btnCorner.CornerRadius = UDim.new(0, 8)
-    btnCorner.Parent = btn
-    
-    -- Color indicator
-    local indicator = Instance.new("Frame")
-    indicator.Size = UDim2.new(0, 3, 0.5, 0)
-    indicator.Position = UDim2.new(0, 8, 0.25, 0)
-    indicator.BackgroundColor3 = color
-    indicator.BorderSizePixel = 0
-    indicator.Parent = btn
-    
-    local indicatorCorner = Instance.new("UICorner")
-    indicatorCorner.CornerRadius = UDim.new(0, 2)
-    indicatorCorner.Parent = indicator
-    
-    -- Word text
-    local wordLabel = Instance.new("TextLabel")
-    wordLabel.Size = UDim2.new(0.6, -20, 1, 0)
-    wordLabel.Position = UDim2.new(0, 20, 0, 0)
-    wordLabel.BackgroundTransparency = 1
-    wordLabel.Text = word:upper()
-    wordLabel.TextColor3 = Color3.fromRGB(220, 220, 255)
-    wordLabel.TextSize = 14
-    wordLabel.Font = Enum.Font.GothamBold
-    wordLabel.TextXAlignment = Enum.TextXAlignment.Left
-    wordLabel.Parent = btn
-    
-    -- Difficulty badge
-    local badge = Instance.new("TextLabel")
-    badge.Size = UDim2.new(0, 70, 0, 22)
-    badge.Position = UDim2.new(1, -130, 0, 8)
-    badge.BackgroundColor3 = color
-    badge.BackgroundTransparency = 0.85
-    badge.Text = diff
-    badge.TextColor3 = color
-    badge.TextSize = 10
-    badge.Font = Enum.Font.GothamBold
-    badge.Parent = btn
-    
-    local badgeCorner = Instance.new("UICorner")
-    badgeCorner.CornerRadius = UDim.new(0, 6)
-    badgeCorner.Parent = badge
-    
-    -- Letter count
-    local lenLabel = Instance.new("TextLabel")
-    lenLabel.Size = UDim2.new(0, 45, 0, 22)
-    lenLabel.Position = UDim2.new(1, -52, 0, 8)
-    lenLabel.BackgroundTransparency = 1
-    lenLabel.Text = #word .. " huruf"
-    lenLabel.TextColor3 = Color3.fromRGB(80, 80, 120)
-    lenLabel.TextSize = 10
-    lenLabel.Font = Enum.Font.Gotham
-    lenLabel.TextXAlignment = Enum.TextXAlignment.Right
-    lenLabel.Parent = btn
-    
-    -- Hover effects
-    btn.MouseEnter:Connect(function()
-        createTween(btn, {BackgroundColor3 = Color3.fromRGB(34, 34, 50)}, 0.15):Play()
-    end)
-    
-    btn.MouseLeave:Connect(function()
-        createTween(btn, {BackgroundColor3 = Color3.fromRGB(24, 24, 36)}, 0.15):Play()
-    end)
-    
-    -- Click to use in chain mode
-    if isChainMode then
-        btn.MouseButton1Click:Connect(function()
-            -- Pilih kata ini untuk chain
-            table.insert(chainHistory, word)
-            currentChainWord = word
-            score = score + #word -- skor berdasarkan panjang kata
-            
-            ScoreLabel.Text = "Skor: " .. score
-            
-            local lastChars = getLastChars(word, CHAIN_LENGTH)
-            ChainWordLabel.Text = "Kata: " .. word:upper() .. "  →  Sambung dengan: " .. lastChars:upper() .. "..."
-            ChainHintLabel.Text = "Riwayat: " .. #chainHistory .. " kata | Ketik kata berawalan \"" .. lastChars:upper() .. "\""
-            
-            SearchInput.Text = lastChars
-            SearchInput:CaptureFocus()
-            
-            -- Flash effect
-            createTween(btn, {BackgroundColor3 = color}, 0.1):Play()
-            task.delay(0.15, function()
-                createTween(btn, {BackgroundColor3 = Color3.fromRGB(24, 24, 36)}, 0.2):Play()
-            end)
-        end)
-    end
-    
-    -- Animate in
-    btn.BackgroundTransparency = 1
-    wordLabel.TextTransparency = 1
-    badge.BackgroundTransparency = 1
-    badge.TextTransparency = 1
-    
-    local delay = index * 0.02
-    task.delay(delay, function()
-        createTween(btn, {BackgroundTransparency = 0}, 0.2):Play()
-        createTween(wordLabel, {TextTransparency = 0}, 0.2):Play()
-        createTween(badge, {BackgroundTransparency = 0.85, TextTransparency = 0}, 0.2):Play()
-    end)
-    
-    return btn
-end
-
-local function displayResults(results)
-    clearResults()
-    
-    if #results == 0 then
-        EmptyLabel.Visible = true
-        EmptyLabel.Text = "Tidak ada kata ditemukan..."
-        ResultCount.Text = "0"
-        ResultsFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
-        return
-    end
-    
-    EmptyLabel.Visible = false
-    ResultCount.Text = tostring(#results)
-    
-    for i, word in ipairs(results) do
-        createWordButton(word, i, isGameActive)
-    end
-    
-    -- Update canvas size
-    task.delay(0.1, function()
-        ResultsFrame.CanvasSize = UDim2.new(0, 0, 0, ResultsLayout.AbsoluteContentSize.Y + 10)
-    end)
-end
-
-------------------------------------------------------------
--- PAGE NAVIGATION
-------------------------------------------------------------
-local function showPage(pageName)
-    LoadingPage.Visible = pageName == "loading"
-    DifficultyPage.Visible = pageName == "difficulty"
-    GamePage.Visible = pageName == "game"
-end
-
-local function showDifficultyPage()
-    -- Update word counts
-    for diffName, btn in pairs(diffButtons) do
-        local countLabel = btn:FindFirstChild("CountLabel")
-        if countLabel then
-            countLabel.Text = formatNumber(#wordsByDifficulty[diffName]) .. " kata"
-        end
-    end
-    AllCountLabel.Text = formatNumber(#allWords) .. " kata"
-    
-    showPage("difficulty")
-end
-
-local function startGame(diffName, mode)
-    selectedMode = mode
-    isGameActive = (mode == "chain")
-    
-    currentDifficulty = diffName
-    chainHistory = {}
-    currentChainWord = nil
-    score = 0
-    
-    if diffName == "Semua" then
-        currentWords = allWords
-        DiffBadge.Text = "⚪ Semua Kata"
-        DiffBadge.TextColor3 = Color3.fromRGB(200, 200, 240)
-    else
-        currentWords = wordsByDifficulty[diffName]
-        local diff = DIFFICULTY[diffName]
-        DiffBadge.Text = diff.icon .. " " .. diffName
-        DiffBadge.TextColor3 = diff.color
-    end
-    
-    -- Setup mode-specific UI
-    if isGameActive then
-        ScoreLabel.Visible = true
-        ScoreLabel.Text = "Skor: 0"
-        ChainInfo.Visible = true
-        ModeLabel.Text = "🔗 Sambung Kata"
-        SearchFrame.Position = UDim2.new(0, 0, 0, 108)
-        ResultsFrame.Size = UDim2.new(1, 0, 1, -162)
-        ResultsFrame.Position = UDim2.new(0, 0, 0, 158)
-        
-        -- Pick random starting word
-        if #currentWords > 0 then
-            local startWord = currentWords[math.random(1, #currentWords)]
-            currentChainWord = startWord
-            table.insert(chainHistory, startWord)
-            
-            local lastChars = getLastChars(startWord, CHAIN_LENGTH)
-            ChainWordLabel.Text = "Mulai: " .. startWord:upper() .. "  →  Sambung: " .. lastChars:upper() .. "..."
-            ChainHintLabel.Text = "Ketik kata yang berawalan \"" .. lastChars:upper() .. "\""
-            SearchInput.PlaceholderText = "Ketik kata berawalan " .. lastChars:upper() .. "..."
-            SearchInput.Text = lastChars
-        end
-    else
-        ScoreLabel.Visible = false
-        ChainInfo.Visible = false
-        ModeLabel.Text = "🔍 Mode Cari"
-        SearchFrame.Position = UDim2.new(0, 0, 0, 42)
-        ResultsFrame.Size = UDim2.new(1, 0, 1, -96)
-        ResultsFrame.Position = UDim2.new(0, 0, 0, 92)
-        SearchInput.PlaceholderText = "Ketik huruf awal kata..."
-        SearchInput.Text = ""
-    end
-    
-    clearResults()
-    EmptyLabel.Visible = true
-    EmptyLabel.Text = isGameActive and "Pilih kata dari hasil pencarian untuk menyambung!" or "Ketik huruf untuk mencari kata..."
-    
-    showPage("game")
-    
-    task.delay(0.1, function()
-        SearchInput:CaptureFocus()
-    end)
-end
-
-------------------------------------------------------------
 -- EVENT CONNECTIONS
 ------------------------------------------------------------
 
--- Mode buttons
-local modeHighlightColor = Color3.fromRGB(33, 150, 243)
-local modeNormalTransparency = 0.15
-local modeInactiveTransparency = 0.7
+-- Difficulty toggles
+for _, diffName in ipairs(DIFFICULTY_ORDER) do
+    local data = toggleButtons[diffName]
+    data.button.MouseButton1Click:Connect(function()
+        difficultyEnabled[diffName] = not difficultyEnabled[diffName]
+        updateToggleVisuals()
 
-local function updateModeButtons(mode)
-    if mode == "search" then
-        ModeFreeBtn.BackgroundTransparency = modeNormalTransparency
-        ModeChainBtn.BackgroundTransparency = modeInactiveTransparency
-    else
-        ModeFreeBtn.BackgroundTransparency = modeInactiveTransparency
-        ModeChainBtn.BackgroundTransparency = modeNormalTransparency
-    end
-end
+        -- Re-trigger search with current text
+        local text = SearchInput.Text:lower():gsub("%s+", "")
+        if #text >= 1 then
+            local results = searchWords(text, MAX_RESULTS)
+            displayResults(results)
+        end
+    end)
 
-ModeFreeBtn.MouseButton1Click:Connect(function()
-    selectedMode = "search"
-    updateModeButtons("search")
-end)
-
-ModeChainBtn.MouseButton1Click:Connect(function()
-    selectedMode = "chain"
-    updateModeButtons("chain")
-end)
-
--- Difficulty buttons
-for diffName, btn in pairs(diffButtons) do
-    btn.MouseButton1Click:Connect(function()
-        if isLoaded then
-            startGame(diffName, selectedMode)
+    -- Hover
+    data.button.MouseEnter:Connect(function()
+        if not difficultyEnabled[diffName] then
+            createTween(data.button, {BackgroundTransparency = 0.6}, 0.12):Play()
+        end
+    end)
+    data.button.MouseLeave:Connect(function()
+        if not difficultyEnabled[diffName] then
+            createTween(data.button, {BackgroundTransparency = 0.85}, 0.12):Play()
         end
     end)
 end
 
-AllBtn.MouseButton1Click:Connect(function()
-    if isLoaded then
-        startGame("Semua", selectedMode)
-    end
+-- Mode buttons
+ModeSearchBtn.MouseButton1Click:Connect(function()
+    if not isChainMode then return end
+    isChainMode = false
+    updateModeVisuals()
+    updateLayout()
+    SearchInput.Text = ""
+    SearchInput.PlaceholderText = "Ketik huruf awal kata..."
+    clearResults()
+    EmptyLabel.Visible = true
+    EmptyLabel.Text = "Ketik huruf untuk mencari kata..."
 end)
 
--- Back button
-BackBtn.MouseButton1Click:Connect(function()
-    isGameActive = false
-    showDifficultyPage()
+ModeChainBtn.MouseButton1Click:Connect(function()
+    if isChainMode then return end
+    isChainMode = true
+    updateModeVisuals()
+    updateLayout()
+    startNewChain()
 end)
 
--- Search functionality
+-- New chain button
+NewChainBtn.MouseButton1Click:Connect(function()
+    startNewChain()
+end)
+
+NewChainBtn.MouseEnter:Connect(function()
+    createTween(NewChainBtn, {BackgroundTransparency = 0.3}, 0.12):Play()
+end)
+NewChainBtn.MouseLeave:Connect(function()
+    createTween(NewChainBtn, {BackgroundTransparency = 0.6}, 0.12):Play()
+end)
+
+-- Search input
 local searchDebounce = false
 SearchInput:GetPropertyChangedSignal("Text"):Connect(function()
     if searchDebounce then return end
     searchDebounce = true
-    
-    task.delay(0.15, function() -- debounce 150ms
+    task.delay(0.12, function()
         searchDebounce = false
         local text = SearchInput.Text:lower():gsub("%s+", "")
-        
         if #text < 1 then
             clearResults()
             EmptyLabel.Visible = true
-            EmptyLabel.Text = isGameActive and "Ketik untuk mencari kata sambungan..." or "Ketik huruf untuk mencari kata..."
-            ResultCount.Text = "0"
+            EmptyLabel.Text = isChainMode and "Cari & klik kata untuk menyambung!" or "Ketik huruf untuk mencari kata..."
+            ResultCount.Text = ""
             return
         end
-        
-        local results = searchWords(text, currentWords, MAX_RESULTS)
+        local results = searchWords(text, MAX_RESULTS)
         displayResults(results)
     end)
 end)
 
--- Close button
+-- Close
 CloseBtn.MouseButton1Click:Connect(function()
-    createTween(MainFrame, {Size = UDim2.new(0, 480, 0, 0)}, 0.3, Enum.EasingStyle.Back, Enum.EasingDirection.In):Play()
-    createTween(MainFrame, {BackgroundTransparency = 1}, 0.25):Play()
-    task.delay(0.3, function()
-        ScreenGui:Destroy()
-    end)
+    createTween(MainFrame, {Size = UDim2.new(0, 500, 0, 0)}, 0.25, Enum.EasingStyle.Back, Enum.EasingDirection.In):Play()
+    task.delay(0.25, function() ScreenGui:Destroy() end)
 end)
 
--- Minimize button
+-- Minimize
 local isMinimized = false
 local savedSize = MainFrame.Size
-
 MinBtn.MouseButton1Click:Connect(function()
     if isMinimized then
-        createTween(MainFrame, {Size = savedSize}, 0.3, Enum.EasingStyle.Quart):Play()
+        createTween(MainFrame, {Size = savedSize}, 0.25):Play()
         isMinimized = false
     else
         savedSize = MainFrame.Size
-        createTween(MainFrame, {Size = UDim2.new(0, 480, 0, 56)}, 0.3, Enum.EasingStyle.Quart):Play()
+        createTween(MainFrame, {Size = UDim2.new(0, 500, 0, 50)}, 0.25):Play()
         isMinimized = true
     end
 end)
 
--- Close/Minimize hover effects
-CloseBtn.MouseEnter:Connect(function()
-    createTween(CloseBtn, {BackgroundTransparency = 0.5}, 0.15):Play()
-end)
-CloseBtn.MouseLeave:Connect(function()
-    createTween(CloseBtn, {BackgroundTransparency = 0.85}, 0.15):Play()
-end)
-MinBtn.MouseEnter:Connect(function()
-    createTween(MinBtn, {BackgroundTransparency = 0.5}, 0.15):Play()
-end)
-MinBtn.MouseLeave:Connect(function()
-    createTween(MinBtn, {BackgroundTransparency = 0.85}, 0.15):Play()
-end)
-BackBtn.MouseEnter:Connect(function()
-    createTween(BackBtn, {BackgroundColor3 = Color3.fromRGB(40, 40, 60)}, 0.15):Play()
-end)
-BackBtn.MouseLeave:Connect(function()
-    createTween(BackBtn, {BackgroundColor3 = Color3.fromRGB(28, 28, 40)}, 0.15):Play()
-end)
+-- Hover effects for close/min
+for _, b in ipairs({CloseBtn, MinBtn}) do
+    b.MouseEnter:Connect(function() createTween(b, {BackgroundTransparency = 0.5}, 0.12):Play() end)
+    b.MouseLeave:Connect(function() createTween(b, {BackgroundTransparency = 0.85}, 0.12):Play() end)
+end
 
-------------------------------------------------------------
--- TOGGLE WITH KEYBIND (Right Shift untuk show/hide)
-------------------------------------------------------------
+-- Toggle visibility: Right Shift
 UserInputService.InputBegan:Connect(function(input, processed)
     if processed then return end
     if input.KeyCode == Enum.KeyCode.RightShift then
@@ -1207,47 +998,48 @@ UserInputService.InputBegan:Connect(function(input, processed)
 end)
 
 ------------------------------------------------------------
--- INITIALIZE
+-- INIT
 ------------------------------------------------------------
-showPage("loading")
-
--- Animate loading bar
-task.spawn(function()
-    local loadTween = createTween(LoadingBarFill, {Size = UDim2.new(0.7, 0, 1, 0)}, 2, Enum.EasingStyle.Linear)
-    loadTween:Play()
-end)
+LoadingPage.Visible = true
+GamePage.Visible = false
 
 -- Open animation
-MainFrame.Size = UDim2.new(0, 480, 0, 0)
+MainFrame.Size = UDim2.new(0, 500, 0, 0)
 MainFrame.BackgroundTransparency = 0.5
-createTween(MainFrame, {Size = UDim2.new(0, 480, 0, 600)}, 0.4, Enum.EasingStyle.Back):Play()
-createTween(MainFrame, {BackgroundTransparency = 0}, 0.3):Play()
+createTween(MainFrame, {Size = UDim2.new(0, 500, 0, 620)}, 0.35, Enum.EasingStyle.Back):Play()
+createTween(MainFrame, {BackgroundTransparency = 0}, 0.25):Play()
 
--- Fetch data
 task.spawn(function()
-    task.wait(0.5) -- tunggu animasi selesai
-    
-    LoadingText.Text = "Mengunduh kamus KBBI dari GitHub..."
-    local success = fetchKBBI()
-    
-    if success then
-        -- Complete loading bar
-        createTween(LoadingBarFill, {Size = UDim2.new(1, 0, 1, 0)}, 0.3):Play()
-        LoadingText.Text = "✅ Berhasil! Memuat " .. formatNumber(#allWords) .. " kata"
-        LoadingBarFill.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
-        
+    createTween(LdBarFill, {Size = UDim2.new(0.65, 0, 1, 0)}, 1.5, Enum.EasingStyle.Linear):Play()
+end)
+
+task.spawn(function()
+    task.wait(0.4)
+    LdText.Text = "Mengunduh kamus KBBI..."
+
+    local ok = fetchKBBI()
+
+    if ok then
+        createTween(LdBarFill, {Size = UDim2.new(1, 0, 1, 0)}, 0.25):Play()
+        LdBarFill.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
+        LdText.Text = "✅ " .. formatNumber(#allWords) .. " kata dimuat!"
         isLoaded = true
-        task.wait(1)
-        showDifficultyPage()
+
+        task.wait(0.8)
+        LoadingPage.Visible = false
+        GamePage.Visible = true
+        updateToggleVisuals()
+        updateModeVisuals()
+        updateLayout()
+        updateWordCount()
     else
-        LoadingText.Text = "❌ Gagal mengunduh! Cek URL GitHub"
-        LoadingBarFill.BackgroundColor3 = Color3.fromRGB(244, 67, 54)
-        createTween(LoadingBarFill, {Size = UDim2.new(1, 0, 1, 0)}, 0.3):Play()
+        createTween(LdBarFill, {Size = UDim2.new(1, 0, 1, 0)}, 0.25):Play()
+        LdBarFill.BackgroundColor3 = Color3.fromRGB(244, 67, 54)
+        LdText.Text = "❌ Gagal! Cek URL GitHub kamu"
     end
 end)
 
-------------------------------------------------------------
 print("═══════════════════════════════════════════")
-print("  🔤 SAMBUNG KATA - KBBI Edition Loaded!")
-print("  Tekan Right Shift untuk Show/Hide GUI")
+print("  🔤 SAMBUNG KATA - KBBI Edition")
+print("  Right Shift = Show/Hide")
 print("═══════════════════════════════════════════")
