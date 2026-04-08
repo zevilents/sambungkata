@@ -26,6 +26,8 @@ local URL_KBBI = "https://raw.githubusercontent.com/zevilents/sambungkata/main/k
 
 local MAX_RESULTS = 50
 local CHAIN_LENGTH = 2
+local AUTOTYPE_DELAY = 0.05   -- Delay antar huruf saat auto-typing (detik). Makin kecil = makin cepat
+local AUTOTYPE_ENABLED = true -- Set false untuk disable fitur auto-type
 
 ------------------------------------------------------------
 -- DIFFICULTY DEFINITIONS
@@ -66,6 +68,7 @@ local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local HttpService = game:GetService("HttpService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -100,6 +103,9 @@ local currentChainWord = nil
 local score = 0
 local isLoaded = false
 local isChainMode = false
+local isTyping = false         -- Apakah sedang auto-typing
+local stopTyping = false       -- Flag untuk menghentikan typing
+local lastTypedPrefix = ""     -- Prefix terakhir yang user ketik
 
 ------------------------------------------------------------
 -- UTILITY
@@ -167,6 +173,91 @@ local function getActiveWordCount()
         end
     end
     return count
+end
+
+------------------------------------------------------------
+-- AUTOTYPE ENGINE (VirtualInputManager)
+------------------------------------------------------------
+-- Map karakter ke Enum.KeyCode
+local CHAR_TO_KEYCODE = {
+    a = Enum.KeyCode.A, b = Enum.KeyCode.B, c = Enum.KeyCode.C,
+    d = Enum.KeyCode.D, e = Enum.KeyCode.E, f = Enum.KeyCode.F,
+    g = Enum.KeyCode.G, h = Enum.KeyCode.H, i = Enum.KeyCode.I,
+    j = Enum.KeyCode.J, k = Enum.KeyCode.K, l = Enum.KeyCode.L,
+    m = Enum.KeyCode.M, n = Enum.KeyCode.N, o = Enum.KeyCode.O,
+    p = Enum.KeyCode.P, q = Enum.KeyCode.Q, r = Enum.KeyCode.R,
+    s = Enum.KeyCode.S, t = Enum.KeyCode.T, u = Enum.KeyCode.U,
+    v = Enum.KeyCode.V, w = Enum.KeyCode.W, x = Enum.KeyCode.X,
+    y = Enum.KeyCode.Y, z = Enum.KeyCode.Z
+}
+
+-- Forward declaration untuk UI status update (akan di-set nanti)
+local updateTypingStatus = nil
+
+local function simulateKeyPress(char)
+    local keyCode = CHAR_TO_KEYCODE[char:lower()]
+    if not keyCode then return end
+    
+    pcall(function()
+        VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
+        task.wait(0.01)
+        VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
+    end)
+end
+
+local function autoTypeText(text, prefix)
+    if not AUTOTYPE_ENABLED then return end
+    if isTyping then
+        stopTyping = true
+        task.wait(0.1)
+    end
+    
+    -- Hitung sisa karakter yang perlu di-type
+    -- prefix = yang sudah user ketik, text = kata lengkap
+    local remaining = ""
+    if #prefix > 0 and startsWith(text, prefix) then
+        remaining = string.sub(text, #prefix + 1)
+    else
+        remaining = text
+    end
+    
+    if #remaining == 0 then return end
+    
+    isTyping = true
+    stopTyping = false
+    
+    if updateTypingStatus then
+        updateTypingStatus(true, remaining, 0)
+    end
+    
+    print("[SambungKata] Auto-typing: " .. remaining:upper() .. " (" .. #remaining .. " huruf)")
+    
+    task.spawn(function()
+        for i = 1, #remaining do
+            if stopTyping then
+                print("[SambungKata] Typing dihentikan!")
+                break
+            end
+            
+            local char = string.sub(remaining, i, i)
+            simulateKeyPress(char)
+            
+            if updateTypingStatus then
+                updateTypingStatus(true, remaining, i)
+            end
+            
+            task.wait(AUTOTYPE_DELAY)
+        end
+        
+        isTyping = false
+        stopTyping = false
+        
+        if updateTypingStatus then
+            updateTypingStatus(false, "", 0)
+        end
+        
+        print("[SambungKata] Selesai typing!")
+    end)
 end
 
 ------------------------------------------------------------
@@ -603,6 +694,77 @@ ResultCount.TextSize = 11
 ResultCount.Font = Enum.Font.Gotham
 ResultCount.Parent = SearchFrame
 
+-- ---- Typing Status Bar ----
+local TypingBar = Instance.new("Frame")
+TypingBar.Name = "TypingBar"
+TypingBar.Size = UDim2.new(1, 0, 0, 30)
+TypingBar.Position = UDim2.new(0, 0, 0, 122)
+TypingBar.BackgroundColor3 = Color3.fromRGB(20, 35, 20)
+TypingBar.BorderSizePixel = 0
+TypingBar.Visible = false
+TypingBar.Parent = GamePage
+Instance.new("UICorner", TypingBar).CornerRadius = UDim.new(0, 8)
+
+local TypingStroke = Instance.new("UIStroke", TypingBar)
+TypingStroke.Color = Color3.fromRGB(76, 175, 80)
+TypingStroke.Transparency = 0.5
+TypingStroke.Thickness = 1
+
+local TypingLabel = Instance.new("TextLabel")
+TypingLabel.Name = "TypingLabel"
+TypingLabel.Size = UDim2.new(1, -80, 1, 0)
+TypingLabel.Position = UDim2.new(0, 10, 0, 0)
+TypingLabel.BackgroundTransparency = 1
+TypingLabel.Text = "⌨ Typing..."
+TypingLabel.TextColor3 = Color3.fromRGB(76, 175, 80)
+TypingLabel.TextSize = 11
+TypingLabel.Font = Enum.Font.GothamBold
+TypingLabel.TextXAlignment = Enum.TextXAlignment.Left
+TypingLabel.Parent = TypingBar
+
+local TypingProgress = Instance.new("TextLabel")
+TypingProgress.Name = "TypingProgress"
+TypingProgress.Size = UDim2.new(0, 36, 1, 0)
+TypingProgress.Position = UDim2.new(1, -76, 0, 0)
+TypingProgress.BackgroundTransparency = 1
+TypingProgress.Text = "0/0"
+TypingProgress.TextColor3 = Color3.fromRGB(76, 175, 80)
+TypingProgress.TextSize = 10
+TypingProgress.Font = Enum.Font.Gotham
+TypingProgress.TextXAlignment = Enum.TextXAlignment.Right
+TypingProgress.Parent = TypingBar
+
+local StopTypingBtn = Instance.new("TextButton")
+StopTypingBtn.Name = "StopTyping"
+StopTypingBtn.Size = UDim2.new(0, 28, 0, 22)
+StopTypingBtn.Position = UDim2.new(1, -34, 0, 4)
+StopTypingBtn.BackgroundColor3 = Color3.fromRGB(244, 67, 54)
+StopTypingBtn.BackgroundTransparency = 0.5
+StopTypingBtn.Text = "■"
+StopTypingBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+StopTypingBtn.TextSize = 10
+StopTypingBtn.Font = Enum.Font.GothamBold
+StopTypingBtn.BorderSizePixel = 0
+StopTypingBtn.Parent = TypingBar
+Instance.new("UICorner", StopTypingBtn).CornerRadius = UDim.new(0, 6)
+
+StopTypingBtn.MouseButton1Click:Connect(function()
+    stopTyping = true
+end)
+
+-- Implement the updateTypingStatus function
+updateTypingStatus = function(active, text, progress)
+    if active then
+        TypingBar.Visible = true
+        local typed = string.sub(text, 1, progress)
+        local remaining = string.sub(text, progress + 1)
+        TypingLabel.Text = "⌨ Typing: " .. typed:upper() .. "|" .. remaining:upper()
+        TypingProgress.Text = progress .. "/" .. #text
+    else
+        TypingBar.Visible = false
+    end
+end
+
 -- ---- ROW 5: Results ----
 local ResultsFrame = Instance.new("ScrollingFrame")
 ResultsFrame.Name = "Results"
@@ -638,12 +800,14 @@ local function updateLayout()
         ChainInfo.Visible = true
         ScoreLabel.Visible = true
         SearchFrame.Position = UDim2.new(0, 0, 0, 136)
+        TypingBar.Position = UDim2.new(0, 0, 0, 180)
         ResultsFrame.Position = UDim2.new(0, 0, 0, 182)
         ResultsFrame.Size = UDim2.new(1, 0, 1, -184)
     else
         ChainInfo.Visible = false
         ScoreLabel.Visible = false
         SearchFrame.Position = UDim2.new(0, 0, 0, 80)
+        TypingBar.Position = UDim2.new(0, 0, 0, 122)
         ResultsFrame.Position = UDim2.new(0, 0, 0, 126)
         ResultsFrame.Size = UDim2.new(1, 0, 1, -128)
     end
@@ -693,6 +857,13 @@ local function createWordItem(word, index)
     local diff = getDifficultyOfWord(word)
     local diffData = diff and DIFFICULTY[diff]
     local color = diffData and diffData.color or Color3.fromRGB(120, 120, 160)
+    
+    -- Hitung prefix & remaining untuk display
+    local currentPrefix = SearchInput.Text:lower():gsub("%s+", "")
+    local remainingText = ""
+    if #currentPrefix > 0 and startsWith(word, currentPrefix) then
+        remainingText = string.sub(word, #currentPrefix + 1)
+    end
 
     local btn = Instance.new("TextButton")
     btn.Name = "W" .. index
@@ -714,22 +885,48 @@ local function createWordItem(word, index)
     bar.Parent = btn
     Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 2)
 
-    -- Word
-    local wl = Instance.new("TextLabel")
-    wl.Size = UDim2.new(0.55, -18, 1, 0)
-    wl.Position = UDim2.new(0, 18, 0, 0)
-    wl.BackgroundTransparency = 1
-    wl.Text = word:upper()
-    wl.TextColor3 = Color3.fromRGB(220, 220, 255)
-    wl.TextSize = 13
-    wl.Font = Enum.Font.GothamBold
-    wl.TextXAlignment = Enum.TextXAlignment.Left
-    wl.Parent = btn
+    -- Word label: prefix (dimmed) + remaining (bright)
+    -- Show the prefix part dimmer and the remaining part bright to hint what will be auto-typed
+    local prefixPart = string.sub(word, 1, #currentPrefix):upper()
+    local remainPart = string.sub(word, #currentPrefix + 1):upper()
+    
+    local wlPrefix = Instance.new("TextLabel")
+    wlPrefix.Size = UDim2.new(0, #prefixPart * 8 + 2, 1, 0)
+    wlPrefix.Position = UDim2.new(0, 18, 0, 0)
+    wlPrefix.BackgroundTransparency = 1
+    wlPrefix.Text = prefixPart
+    wlPrefix.TextColor3 = Color3.fromRGB(100, 100, 150)
+    wlPrefix.TextSize = 13
+    wlPrefix.Font = Enum.Font.GothamBold
+    wlPrefix.TextXAlignment = Enum.TextXAlignment.Left
+    wlPrefix.Parent = btn
+    
+    local wlRemain = Instance.new("TextLabel")
+    wlRemain.Size = UDim2.new(0.45, 0, 1, 0)
+    wlRemain.Position = UDim2.new(0, 18 + #prefixPart * 8 + 2, 0, 0)
+    wlRemain.BackgroundTransparency = 1
+    wlRemain.Text = remainPart
+    wlRemain.TextColor3 = Color3.fromRGB(120, 255, 160)
+    wlRemain.TextSize = 13
+    wlRemain.Font = Enum.Font.GothamBold
+    wlRemain.TextXAlignment = Enum.TextXAlignment.Left
+    wlRemain.Parent = btn
+
+    -- Auto-type icon indicator
+    local typeIcon = Instance.new("TextLabel")
+    typeIcon.Size = UDim2.new(0, 20, 0, 20)
+    typeIcon.Position = UDim2.new(1, -170, 0, 8)
+    typeIcon.BackgroundTransparency = 1
+    typeIcon.Text = "⌨"
+    typeIcon.TextColor3 = Color3.fromRGB(76, 175, 80)
+    typeIcon.TextSize = 12
+    typeIcon.Font = Enum.Font.Gotham
+    typeIcon.Parent = btn
 
     -- Difficulty badge
     local badge = Instance.new("TextLabel")
     badge.Size = UDim2.new(0, 60, 0, 20)
-    badge.Position = UDim2.new(1, -118, 0, 8)
+    badge.Position = UDim2.new(1, -148, 0, 8)
     badge.BackgroundColor3 = color
     badge.BackgroundTransparency = 0.85
     badge.Text = diff or "?"
@@ -741,10 +938,10 @@ local function createWordItem(word, index)
 
     -- Length
     local ll = Instance.new("TextLabel")
-    ll.Size = UDim2.new(0, 46, 0, 20)
-    ll.Position = UDim2.new(1, -52, 0, 8)
+    ll.Size = UDim2.new(0, 80, 0, 20)
+    ll.Position = UDim2.new(1, -82, 0, 8)
     ll.BackgroundTransparency = 1
-    ll.Text = #word .. " huruf"
+    ll.Text = #word .. "h | +" .. #remainingText .. " type"
     ll.TextColor3 = Color3.fromRGB(75, 75, 115)
     ll.TextSize = 9
     ll.Font = Enum.Font.Gotham
@@ -753,41 +950,53 @@ local function createWordItem(word, index)
 
     -- Hover
     btn.MouseEnter:Connect(function()
-        createTween(btn, {BackgroundColor3 = Color3.fromRGB(32, 32, 48)}, 0.12):Play()
+        createTween(btn, {BackgroundColor3 = Color3.fromRGB(28, 38, 32)}, 0.12):Play()
+        createTween(typeIcon, {TextTransparency = 0}, 0.1):Play()
     end)
     btn.MouseLeave:Connect(function()
         createTween(btn, {BackgroundColor3 = Color3.fromRGB(22, 22, 34)}, 0.12):Play()
     end)
 
-    -- Click: chain mode
-    if isChainMode then
-        btn.MouseButton1Click:Connect(function()
+    -- Click handler: Auto-type the remaining characters
+    btn.MouseButton1Click:Connect(function()
+        local prefix = SearchInput.Text:lower():gsub("%s+", "")
+        lastTypedPrefix = prefix
+        
+        -- Flash effect
+        createTween(btn, {BackgroundColor3 = Color3.fromRGB(76, 175, 80)}, 0.08):Play()
+        task.delay(0.15, function()
+            createTween(btn, {BackgroundColor3 = Color3.fromRGB(22, 22, 34)}, 0.2):Play()
+        end)
+        
+        -- Chain mode: update chain state
+        if isChainMode then
             table.insert(chainHistory, word)
             currentChainWord = word
             score = score + #word
             ScoreLabel.Text = "Skor: " .. score
-
+            
             local lastC = getLastChars(word, CHAIN_LENGTH)
             ChainWordLabel.Text = "🔗 " .. word:upper() .. "  ➜  sambung: " .. lastC:upper() .. "..."
             ChainHintLabel.Text = "Riwayat: " .. #chainHistory .. " kata | kata berawalan \"" .. lastC:upper() .. "\""
-
-            SearchInput.Text = lastC
-            SearchInput:CaptureFocus()
-
-            -- flash
-            createTween(btn, {BackgroundColor3 = color}, 0.08):Play()
-            task.delay(0.12, function()
-                createTween(btn, {BackgroundColor3 = Color3.fromRGB(22, 22, 34)}, 0.15):Play()
-            end)
+        end
+        
+        -- Release focus dari SearchInput supaya keypress masuk ke chat/game
+        SearchInput:ReleaseFocus()
+        
+        -- Tunggu sebentar lalu mulai auto-type
+        task.delay(0.15, function()
+            autoTypeText(word, prefix)
         end)
-    end
+    end)
 
     -- Animate in
     btn.BackgroundTransparency = 1
-    wl.TextTransparency = 1
+    wlPrefix.TextTransparency = 1
+    wlRemain.TextTransparency = 1
     task.delay(index * 0.015, function()
         createTween(btn, {BackgroundTransparency = 0}, 0.15):Play()
-        createTween(wl, {TextTransparency = 0}, 0.15):Play()
+        createTween(wlPrefix, {TextTransparency = 0}, 0.15):Play()
+        createTween(wlRemain, {TextTransparency = 0}, 0.15):Play()
     end)
 
     return btn
@@ -947,10 +1156,12 @@ end)
 local searchDebounce = false
 SearchInput:GetPropertyChangedSignal("Text"):Connect(function()
     if searchDebounce then return end
+    if isTyping then return end -- jangan re-search saat sedang auto-typing
     searchDebounce = true
     task.delay(0.12, function()
         searchDebounce = false
         local text = SearchInput.Text:lower():gsub("%s+", "")
+        lastTypedPrefix = text -- simpan prefix terakhir
         if #text < 1 then
             clearResults()
             EmptyLabel.Visible = true
