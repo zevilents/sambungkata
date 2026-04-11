@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║              SAMBUNG KATA - KBBI EDITION v3                 ║
+    ║              SAMBUNG KATA - KBBI EDITION v4                 ║
     ║         Script by: Antigravity AI Assistant                 ║
     ║     Inject via Executor | Data dari GitHub (kbbi.txt)       ║
     ║     ✅ Responsive: Desktop & Mobile compatible              ║
@@ -141,6 +141,7 @@ local autoDetectEnabled = true
 local lastDetectedLetter = ""
 local usedWords = {}
 local usedWordsCount = 0
+local lastTypedLength = 0
 
 ------------------------------------------------------------
 -- UTILITY
@@ -391,6 +392,9 @@ local function autoTypeText(text, prefix)
         remaining = text
     end
     if #remaining == 0 then return end
+    
+    lastTypedLength = #remaining
+    
     isTyping = true
     stopTyping = false
     if updateTypingStatus then updateTypingStatus(true, remaining, 0) end
@@ -751,6 +755,7 @@ ModeRow.Parent = GamePage
 
 local modeBtnW = isMobile and 100 or 130
 local modeChainW = isMobile and 110 or 140
+local delBtnW = isMobile and 60 or 70
 
 local ModeSearchBtn = createPill(ModeRow, "🔍 Cari Kata",
     UDim2.new(0, 0, 0, 0), UDim2.new(0, modeBtnW, 1, 0),
@@ -759,6 +764,32 @@ local ModeSearchBtn = createPill(ModeRow, "🔍 Cari Kata",
 local ModeChainBtn = createPill(ModeRow, "🔗 Sambung Kata",
     UDim2.new(0, modeBtnW + 4, 0, 0), UDim2.new(0, modeChainW, 1, 0),
     false, C.purple, Color3.fromRGB(255,255,255), C.purpleBg, C.purple)
+
+local DeleteBtn = createPill(ModeRow, "⌫ Hapus",
+    UDim2.new(0, modeBtnW + modeChainW + 8, 0, 0), UDim2.new(0, delBtnW, 1, 0),
+    false, C.dangerBg, C.danger, C.dangerBg, C.danger)
+
+-- Delete logic
+DeleteBtn.MouseButton1Click:Connect(function()
+    createTween(DeleteBtn, {BackgroundColor3 = C.danger, TextColor3 = Color3.fromRGB(255,255,255)}, 0.1):Play()
+    task.delay(0.2, function() createTween(DeleteBtn, {BackgroundColor3 = C.dangerBg, TextColor3 = C.danger}, 0.2):Play() end)
+    
+    if lastTypedLength > 0 then
+        task.spawn(function()
+            for i = 1, lastTypedLength do
+                pcall(function()
+                    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Backspace, false, game)
+                    task.wait(0.01)
+                    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Backspace, false, game)
+                end)
+                task.wait(SPEED_MODES[currentSpeedIndex].delay / 2)
+            end
+            lastTypedLength = 0 -- Reset after deletion
+        end)
+    end
+end)
+DeleteBtn.MouseEnter:Connect(function() createTween(DeleteBtn, {BackgroundColor3 = C.danger, TextColor3 = Color3.fromRGB(255,255,255)}, 0.1):Play() end)
+DeleteBtn.MouseLeave:Connect(function() createTween(DeleteBtn, {BackgroundColor3 = C.dangerBg, TextColor3 = C.danger}, 0.1):Play() end)
 
 local ScoreLabel = Instance.new("TextLabel")
 ScoreLabel.Size = UDim2.new(0, 70, 0, 24)
