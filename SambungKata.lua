@@ -1,6 +1,6 @@
 --[[
     ╔══════════════════════════════════════════════════════════════╗
-    ║              SAMBUNG KATA - KBBI EDITION v4                 ║
+    ║              SAMBUNG KATA - KBBI EDITION v3                 ║
     ║         Script by: Antigravity AI Assistant                 ║
     ║     Inject via Executor | Data dari GitHub (kbbi.txt)       ║
     ║     ✅ Responsive: Desktop & Mobile compatible              ║
@@ -77,23 +77,23 @@ local isMobile = (UserInputService.TouchEnabled and not UserInputService.Keyboar
     or viewportSize.X < 800
 
 -- Responsive sizing
-local UI_WIDTH = isMobile and math.min(viewportSize.X - 20, 380) or 480
-local UI_HEIGHT = isMobile and math.min(viewportSize.Y - 40, 550) or 650
-local FONT_TITLE = isMobile and 14 or 16
-local FONT_BODY = isMobile and 12 or 14
+local UI_WIDTH = isMobile and math.min(viewportSize.X - 10, 320) or 480
+local UI_HEIGHT = isMobile and math.min(viewportSize.Y - 10, 480) or 650
+local FONT_TITLE = isMobile and 12 or 16
+local FONT_BODY = isMobile and 10 or 14
 local FONT_SMALL = isMobile and 8 or 10
 local FONT_TINY = isMobile and 7 or 9
-local PAD = isMobile and 8 or 12
-local BTN_H = isMobile and 28 or 36
-local TAG_H = isMobile and 18 or 22
-local TAG_W1 = isMobile and 22 or 28
-local TAG_GAP = isMobile and 2 or 3
-local TAG_W2_MULT = isMobile and 7 or 9
-local SEARCH_H = isMobile and 34 or 40
-local RESULT_H = isMobile and 32 or 38
-local TITLE_H = isMobile and 44 or 52
-local ROW_H = isMobile and 24 or 28
-local CORNER = isMobile and 10 or 16
+local PAD = isMobile and 6 or 12
+local BTN_H = isMobile and 22 or 36
+local TAG_H = isMobile and 15 or 22
+local TAG_W1 = isMobile and 18 or 28
+local TAG_GAP = isMobile and 1 or 3
+local TAG_W2_MULT = isMobile and 6 or 9
+local SEARCH_H = isMobile and 28 or 40
+local RESULT_H = isMobile and 26 or 38
+local TITLE_H = isMobile and 36 or 52
+local ROW_H = isMobile and 20 or 28
+local CORNER = isMobile and 8 or 16
 
 ------------------------------------------------------------
 -- COLOR PALETTE (Light Modern Theme)
@@ -522,7 +522,7 @@ MainFrame:GetPropertyChangedSignal("Size"):Connect(function()
 end)
 
 -- ====== RESIZE HANDLE ======
-local MIN_W, MIN_H = 280, 350
+local MIN_W, MIN_H = isMobile and 240 or 280, isMobile and 300 or 350
 local MAX_W = math.max(viewportSize.X - 20, 500)
 local MAX_H = math.max(viewportSize.Y - 20, 500)
 
@@ -635,7 +635,7 @@ TitleLabel.Font = Enum.Font.GothamBold
 TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
 TitleLabel.Parent = TitleBar
 
-local closeSz = isMobile and 26 or 30
+local closeSz = isMobile and 24 or 30
 local CloseBtn = Instance.new("TextButton")
 CloseBtn.Size = UDim2.new(0, closeSz, 0, closeSz)
 CloseBtn.Position = UDim2.new(1, -closeSz-PAD, 0, (TITLE_H-closeSz)/2)
@@ -753,9 +753,9 @@ ModeRow.Position = UDim2.new(0, 0, 0, yPos)
 ModeRow.BackgroundTransparency = 1
 ModeRow.Parent = GamePage
 
-local modeBtnW = isMobile and 100 or 130
-local modeChainW = isMobile and 110 or 140
-local delBtnW = isMobile and 60 or 70
+local modeBtnW = isMobile and 75 or 130
+local modeChainW = isMobile and 85 or 140
+local delBtnW = isMobile and 50 or 70
 
 local ModeSearchBtn = createPill(ModeRow, "🔍 Cari Kata",
     UDim2.new(0, 0, 0, 0), UDim2.new(0, modeBtnW, 1, 0),
@@ -812,7 +812,7 @@ DetectRow.Position = UDim2.new(0, 0, 0, yPos)
 DetectRow.BackgroundTransparency = 1
 DetectRow.Parent = GamePage
 
-local detectBtnW = isMobile and 90 or 110
+local detectBtnW = isMobile and 70 or 110
 local DetectToggle = createPill(DetectRow, "📷 Auto-Detect",
     UDim2.new(0, 0, 0, 0), UDim2.new(0, detectBtnW, 1, 0),
     true, C.cyan, Color3.fromRGB(255,255,255), C.cyanBg, C.cyan)
@@ -836,7 +836,7 @@ DetectStatusLabel.Font = Enum.Font.Gotham
 DetectStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
 DetectStatusLabel.Parent = DetectStatusBg
 
-local badgeSz = isMobile and 24 or 28
+local badgeSz = isMobile and 18 or 28
 local DetectBadge = Instance.new("TextLabel")
 DetectBadge.Size = UDim2.new(0, badgeSz, 1, 0)
 DetectBadge.Position = UDim2.new(1, -badgeSz-2, 0, 0)
@@ -1060,8 +1060,8 @@ SpeedLabel.TextXAlignment = Enum.TextXAlignment.Left
 SpeedLabel.Parent = ControlRow
 
 local speedButtons = {}
-local spX = isMobile and 40 or 50
-local spBtnW = isMobile and 48 or 60
+local spX = isMobile and 35 or 50
+local spBtnW = isMobile and 42 or 60
 for idx, mode in ipairs(SPEED_MODES) do
     local isActive = (idx == currentSpeedIndex)
     local sBtn = Instance.new("TextButton")
@@ -1096,10 +1096,10 @@ for idx, sBtn in ipairs(speedButtons) do
     end)
 end
 
-local resetBtnW = isMobile and 50 or 60
+local resetBtnW = isMobile and 46 or 60
 local UsedLabel = Instance.new("TextLabel")
-UsedLabel.Size = UDim2.new(0, isMobile and 50 or 70, 1, 0)
-UsedLabel.Position = UDim2.new(1, -(resetBtnW + (isMobile and 54 or 74)), 0, 0)
+UsedLabel.Size = UDim2.new(0, isMobile and 45 or 70, 1, 0)
+UsedLabel.Position = UDim2.new(1, -(resetBtnW + (isMobile and 50 or 74)), 0, 0)
 UsedLabel.BackgroundTransparency = 1
 UsedLabel.Text = "0 dipakai"
 UsedLabel.TextColor3 = C.textMuted
@@ -1143,7 +1143,7 @@ yPos = yPos + ROW_H + 2
 -- ---- Chain info (hidden by default) ----
 local chainY = yPos
 local ChainInfo = Instance.new("Frame")
-ChainInfo.Size = UDim2.new(1, 0, 0, isMobile and 38 or 46)
+ChainInfo.Size = UDim2.new(1, 0, 0, isMobile and 34 or 46)
 ChainInfo.Position = UDim2.new(0, 0, 0, chainY)
 ChainInfo.BackgroundColor3 = C.purpleBg
 ChainInfo.BorderSizePixel = 0
@@ -1176,7 +1176,7 @@ ChainHintLabel.Parent = ChainInfo
 
 local NewChainBtn = Instance.new("TextButton")
 NewChainBtn.Size = UDim2.new(0, 22, 0, 22)
-NewChainBtn.Position = UDim2.new(1, -28, 0, (isMobile and 38 or 46 - 22)/2)
+NewChainBtn.Position = UDim2.new(1, -28, 0, (isMobile and 34 or 46 - 22)/2)
 NewChainBtn.BackgroundColor3 = C.purple
 NewChainBtn.Text = "↻"
 NewChainBtn.TextColor3 = Color3.fromRGB(255,255,255)
