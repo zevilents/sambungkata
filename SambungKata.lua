@@ -509,6 +509,102 @@ MainFrame:GetPropertyChangedSignal("Position"):Connect(function()
     )
 end)
 
+-- Sync shadow size with MainFrame size
+MainFrame:GetPropertyChangedSignal("Size"):Connect(function()
+    Shadow.Size = UDim2.new(
+        0, MainFrame.Size.X.Offset + 40,
+        0, MainFrame.Size.Y.Offset + 40
+    )
+end)
+
+-- ====== RESIZE HANDLE ======
+local MIN_W, MIN_H = 280, 350
+local MAX_W = math.max(viewportSize.X - 20, 500)
+local MAX_H = math.max(viewportSize.Y - 20, 500)
+
+local ResizeHandle = Instance.new("TextButton")
+ResizeHandle.Name = "ResizeHandle"
+ResizeHandle.Size = UDim2.new(0, 20, 0, 20)
+ResizeHandle.Position = UDim2.new(1, -20, 1, -20)
+ResizeHandle.BackgroundTransparency = 1
+ResizeHandle.Text = "⟊"
+ResizeHandle.TextColor3 = C.textMuted
+ResizeHandle.TextSize = 14
+ResizeHandle.Font = Enum.Font.GothamBold
+ResizeHandle.BorderSizePixel = 0
+ResizeHandle.AutoButtonColor = false
+ResizeHandle.ZIndex = 10
+ResizeHandle.Parent = MainFrame
+
+-- Visual resize grip (3 dots pattern)
+local grip1 = Instance.new("Frame")
+grip1.Size = UDim2.new(0, 3, 0, 3)
+grip1.Position = UDim2.new(1, -7, 1, -7)
+grip1.BackgroundColor3 = C.textMuted
+grip1.BorderSizePixel = 0
+grip1.ZIndex = 10
+grip1.Parent = MainFrame
+Instance.new("UICorner", grip1).CornerRadius = UDim.new(1, 0)
+
+local grip2 = Instance.new("Frame")
+grip2.Size = UDim2.new(0, 3, 0, 3)
+grip2.Position = UDim2.new(1, -13, 1, -7)
+grip2.BackgroundColor3 = C.textMuted
+grip2.BorderSizePixel = 0
+grip2.ZIndex = 10
+grip2.Parent = MainFrame
+Instance.new("UICorner", grip2).CornerRadius = UDim.new(1, 0)
+
+local grip3 = Instance.new("Frame")
+grip3.Size = UDim2.new(0, 3, 0, 3)
+grip3.Position = UDim2.new(1, -7, 1, -13)
+grip3.BackgroundColor3 = C.textMuted
+grip3.BorderSizePixel = 0
+grip3.ZIndex = 10
+grip3.Parent = MainFrame
+Instance.new("UICorner", grip3).CornerRadius = UDim.new(1, 0)
+
+local resizing = false
+local resizeStart = nil
+local resizeStartSize = nil
+
+ResizeHandle.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        resizing = true
+        resizeStart = input.Position
+        resizeStartSize = Vector2.new(MainFrame.Size.X.Offset, MainFrame.Size.Y.Offset)
+    end
+end)
+
+ResizeHandle.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        resizing = false
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if resizing and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - resizeStart
+        local newW = math.clamp(resizeStartSize.X + delta.X, MIN_W, MAX_W)
+        local newH = math.clamp(resizeStartSize.Y + delta.Y, MIN_H, MAX_H)
+        MainFrame.Size = UDim2.new(0, newW, 0, newH)
+    end
+end)
+
+-- Hover effect for resize handle
+ResizeHandle.MouseEnter:Connect(function()
+    createTween(grip1, {BackgroundColor3 = C.accent}, 0.1):Play()
+    createTween(grip2, {BackgroundColor3 = C.accent}, 0.1):Play()
+    createTween(grip3, {BackgroundColor3 = C.accent}, 0.1):Play()
+end)
+ResizeHandle.MouseLeave:Connect(function()
+    if not resizing then
+        createTween(grip1, {BackgroundColor3 = C.textMuted}, 0.1):Play()
+        createTween(grip2, {BackgroundColor3 = C.textMuted}, 0.1):Play()
+        createTween(grip3, {BackgroundColor3 = C.textMuted}, 0.1):Play()
+    end
+end)
+
 -- ====== TITLE BAR ======
 local TitleBar = Instance.new("Frame")
 TitleBar.Size = UDim2.new(1, 0, 0, TITLE_H)
@@ -1406,7 +1502,9 @@ end
 local dragging, dragStart, startPos = false, nil, nil
 TitleBar.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        dragging = true; dragStart = input.Position; startPos = MainFrame.Position
+        if not resizing then -- Don't start drag if resizing
+            dragging = true; dragStart = input.Position; startPos = MainFrame.Position
+        end
     end
 end)
 TitleBar.InputEnded:Connect(function(input)
@@ -1415,6 +1513,7 @@ TitleBar.InputEnded:Connect(function(input)
     end
 end)
 UserInputService.InputChanged:Connect(function(input)
+    if resizing then return end -- resize takes priority
     if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
         local delta = input.Position - dragStart
         MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
